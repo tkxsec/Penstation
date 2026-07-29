@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>penstation · add a tool</title>
+<style>
+  :root{ --bg:#ffffff; --panel:#f6f8fa; --border:#d0d7de; --fg:#1f2328; --dim:#656d76;
+         --accent:#0969da; --green:#1a7f37; --amber:#9a6700; --red:#cf222e; }
+  *{ box-sizing:border-box; }
+  body{ margin:0; font:14px/1.5 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+        background:var(--bg); color:var(--fg); }
+  header{ padding:14px 20px; border-bottom:1px solid var(--border); background:var(--panel);
+          display:flex; align-items:center; gap:12px; }
+  h1{ margin:0; font-size:16px; letter-spacing:.5px; } h1 span{ color:var(--accent); }
+  .dockstate{ font-size:12px; color:var(--dim); }
+  main{ max-width:940px; margin:0 auto; padding:22px 20px; }
+  h2{ font-size:12px; text-transform:uppercase; letter-spacing:1px; color:var(--dim); margin:0 0 10px; }
+  section{ margin-bottom:26px; }
+  input, select, button{ font:inherit; }
+  input, select{ background:#fff; border:1px solid var(--border); color:var(--fg);
+                 border-radius:6px; padding:9px 11px; }
+  button{ background:var(--accent); color:#fff; border:0; border-radius:6px;
+          padding:9px 18px; cursor:pointer; font-weight:600; }
+  button.ghost{ background:#fff; color:var(--fg); border:1px solid var(--border); font-weight:400; }
+  button:disabled{ opacity:.45; cursor:default; }
+  .addrow{ display:flex; gap:8px; flex-wrap:wrap; }
+  .addrow input{ flex:1; min-width:260px; font-family:ui-monospace,Menlo,monospace; font-size:13px; }
+  .err{ color:var(--red); font-size:13px; margin-top:8px; }
+  .card{ border:1px solid var(--border); border-radius:8px; background:#fff; margin-bottom:10px; }
+  .card .top{ display:flex; justify-content:space-between; align-items:center; gap:10px;
+              padding:12px 14px; cursor:pointer; }
+  .nm{ font-weight:600; }
+  .sub{ color:var(--dim); font-size:12px; margin-top:2px; }
+  .right{ display:flex; align-items:center; gap:10px; }
+  .badge{ font-size:11px; padding:2px 9px; border-radius:20px; border:1px solid var(--border);
+          white-space:nowrap; }
+  .badge.queued,.badge.inspecting{ color:var(--dim); }
+  .badge.building,.badge.repairing,.badge.verifying{ color:var(--amber); border-color:var(--amber); }
+  .badge.ready{ color:var(--green); border-color:var(--green); }
+  .badge.failed{ color:var(--red); border-color:var(--red); }
+  .spin{ display:inline-block; width:9px; height:9px; border:2px solid var(--amber);
+         border-right-color:transparent; border-radius:50%; animation:s .7s linear infinite; }
+  @keyframes s{ to{ transform:rotate(360deg) } }
+  .body{ border-top:1px solid var(--border); padding:12px 14px; }
+  .kv{ display:grid; grid-template-columns:auto 1fr; gap:2px 12px; font-size:13px; margin-bottom:10px; }
+  .kv div:nth-child(odd){ color:var(--dim); }
+  code{ font-family:ui-monospace,Menlo,monospace; font-size:12px; word-break:break-all; }
+  pre{ background:var(--panel); border:1px solid var(--border); border-radius:6px; padding:10px;
+       overflow:auto; max-height:340px; font-size:12px; white-space:pre-wrap; margin:0; }
+  /* terminal pane — matches what the backend prints, colours preserved */
+  pre.term{ background:#000; color:#e5e5e5; border-color:#30363d;
+            font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+            font-size:12px; line-height:1.45; padding:11px 12px;
+            white-space:pre-wrap; word-break:break-word; }
+  pre.term::selection, pre.term ::selection{ background:#3b8eea; color:#fff; }
+  .empty{ color:var(--dim); font-style:italic; }
+  .runbox{ border-top:1px solid var(--border); padding:12px 14px; background:var(--panel); }
+  .runbox .lbl{ font-size:11px; text-transform:uppercase; letter-spacing:.5px; color:var(--dim);
+                margin-bottom:4px; display:flex; justify-content:space-between; }
+  .runbox .fields{ display:flex; gap:8px; align-items:center; }
+  .runbox input{ flex:1; font-family:ui-monospace,Menlo,monospace; font-size:12px; }
+  .exit0{ color:var(--green); } .exitN{ color:var(--red); }
+  /* command + live output on the left, --help reference on the right */
+  .split{ display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-top:12px; }
+  @media (max-width:900px){ .split{ grid-template-columns:1fr; } }
+  .split pre{ max-height:300px; }
+  .running{ color:var(--amber); font-size:12px; }
+  .tabs{ display:flex; gap:14px; border-bottom:1px solid var(--border); margin-bottom:10px; }
+  .tabs a{ font-size:12px; color:var(--dim); cursor:pointer; padding-bottom:6px;
+           border-bottom:2px solid transparent; }
+  .tabs a.on{ color:var(--fg); border-bottom-color:var(--accent); }
+  button.stop{ background:var(--red); }
+</style>
+</head>
+<body>
+<header>
+  <h1>pen<span>station</span> · add a tool</h1>
+  <span class="dockstate" id="dock"></span>
+</header>
+<main>
+  <section id="settings"></section>
+  <section>
+    <h2>Add a tool</h2>
+    <div class="addrow">
+      <input id="url" placeholder="https://github.com/owner/repo" onkeydown="if(event.key==='Enter')add()">
+      <select id="section">
+        <option value="reconnaissance">Reconnaissance</option>
+        <option value="active-scanning">Active Scanning &amp; Discovery</option>
+        <option value="web-analysis">Web Analysis</option>
+        <option value="information-exposure">Information Exposure</option>
+        <option value="password-spraying">Password Spraying</option>
+        <option value="exploitation">Exploitation</option>
+      </select>
+      <button id="addbtn" onclick="add()">Add</button>
+    </div>
+    <div class="err" id="err"></div>
+  </section>
+  <section>
+    <h2>Tools</h2>
+    <div id="list"><div class="empty">Nothing added yet.</div></div>
+  </section>
+</main>
+
+<script>
+const tools = new Map();      // id -> record
+const logs  = new Map();      // id -> accumulated log text
+const open  = new Set();      // expanded cards
+const runs   = new Map();     // id -> {busy} | {code, files} | {error}
+const runout = new Map();     // id -> accumulated live run output
+const tabs   = new Map();     // id -> "run" | "log"
+const ACTIVE = ["queued","inspecting","building","repairing","verifying"];
+const esc = s => (s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+
+/* ---- ANSI → HTML, so output looks like the real terminal ----
+   Tools colour their output with ANSI escapes (bbot emits ~110 per scan).
+   Rather than strip them, translate to spans and render on a black pane.
+   Every text chunk is HTML-escaped, so tool output can never inject markup. */
+const BASIC16 = ["#000000","#cd3131","#0dbc79","#e5e510","#2472c8","#bc3fbc",
+                 "#11a8cd","#e5e5e5","#666666","#f14c4c","#23d18b","#f5f543",
+                 "#3b8eea","#d670d6","#29b8db","#ffffff"];
+const CUBE = [0,95,135,175,215,255];
+
+function xterm256(n){
+  n = Number(n)||0;
+  if(n < 16) return BASIC16[n];
+  if(n < 232){ const c=n-16;
+    return `rgb(${CUBE[Math.floor(c/36)]},${CUBE[Math.floor((c%36)/6)]},${CUBE[c%6]})`; }
+  const g = 8 + (n-232)*10; return `rgb(${g},${g},${g})`;
+}
+
+// SGR colour codes are translated; other escapes (cursor moves, OSC titles) dropped.
+const ANSI_RE = /\x1b\[([0-9;]*)m|\x1b\[[0-9;?]*[a-zA-Z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g;
+
+function ansiToHtml(text){
+  let fg=null, bg=null, bold=false, dim=false, ul=false, it=false;
+  let out="", last=0, m;
+  const style = () => {
+    const s=[];
+    if(fg) s.push("color:"+fg);
+    if(bg) s.push("background:"+bg);
+    if(bold) s.push("font-weight:700");
+    if(dim) s.push("opacity:.6");
+    if(ul) s.push("text-decoration:underline");
+    if(it) s.push("font-style:italic");
+    return s.join(";");
+  };
+  const emit = chunk => {
+    if(!chunk) return;
+    const st = style();
+    out += st ? `<span style="${st}">${esc(chunk)}</span>` : esc(chunk);
+  };
+  ANSI_RE.lastIndex = 0;
+  while((m = ANSI_RE.exec(text)) !== null){
+    emit(text.slice(last, m.index));
+    last = ANSI_RE.lastIndex;
+    if(m[1] === undefined) continue;                 // not an SGR — drop it
+    const p = m[1] === "" ? [0] : m[1].split(";").map(Number);
+    for(let i=0;i<p.length;i++){
+      const c = p[i];
+      if(c===0){ fg=bg=null; bold=dim=ul=it=false; }
+      else if(c===1) bold=true;
+      else if(c===2) dim=true;
+      else if(c===3) it=true;
+      else if(c===4) ul=true;
+      else if(c===22){ bold=false; dim=false; }
+      else if(c===23) it=false;
+      else if(c===24) ul=false;
+      else if(c===39) fg=null;
+      else if(c===49) bg=null;
+      else if(c>=30 && c<=37)   fg=BASIC16[c-30];
+      else if(c>=90 && c<=97)   fg=BASIC16[c-90+8];
+      else if(c>=40 && c<=47)   bg=BASIC16[c-40];
+      else if(c>=100 && c<=107) bg=BASIC16[c-100+8];
+      else if(c===38 || c===48){
+        const isFg = c===38, mode = p[i+1];
+        let col = null;
+        if(mode===5){ col = xterm256(p[i+2]); i+=2; }
+        else if(mode===2){ col = `rgb(${p[i+2]||0},${p[i+3]||0},${p[i+4]||0})`; i+=4; }
+        if(col){ if(isFg) fg=col; else bg=col; }
+      }
+    }
+  }
+  emit(text.slice(last));
+  return out;
+}
+
+// Keep panes bounded — a long scan can emit megabytes.
+const MAX_PANE = 250000;
+const clip = s => (s && s.length > MAX_PANE) ? s.slice(-MAX_PANE) : (s||"");
+
+/* ---- events ---- */
+function connect(){
+  const es = new EventSource("/events");
+  es.addEventListener("snapshot", e => {
+    JSON.parse(e.data).forEach(t => tools.set(t.id, t));
+    render();
+    // fetch logs for anything already in flight or finished
+    tools.forEach((t,id) => { if(!logs.has(id)) fetchLog(id); });
+  });
+  es.addEventListener("status", e => {
+    const t = JSON.parse(e.data); tools.set(t.id, t);
+    if(ACTIVE.includes(t.status)) open.add(t.id);   // auto-expand while working
+    render();
+  });
+  es.addEventListener("log", e => {
+    const d = JSON.parse(e.data);
+    logs.set(d.id, (logs.get(d.id)||"") + d.line);
+    paintLog(d.id);
+  });
+  es.addEventListener("run_start", e => {
+    const d = JSON.parse(e.data);
+    runout.set(d.id, ""); runs.set(d.id, {busy:true}); render();
+  });
+  es.addEventListener("run_log", e => {
+    const d = JSON.parse(e.data);
+    runout.set(d.id, (runout.get(d.id)||"") + d.line);
+    paintRun(d.id);
+  });
+  es.addEventListener("run_done", e => {
+    const d = JSON.parse(e.data);
+    runs.set(d.id, {code:d.code, files:d.files, error:d.error});
+    render();
+  });
+  es.addEventListener("removed", e => {
+    const d = JSON.parse(e.data);
+    tools.delete(d.id); logs.delete(d.id); runout.delete(d.id); runs.delete(d.id); render();
+  });
+}
+async function fetchLog(id){
+  try{ const d = await (await fetch(`/tools/${id}/log`)).json();
+       if(d.log){ logs.set(id, d.log); paintLog(id); } }catch(e){}
+}
+
+/* ---- actions ---- */
+async function add(){
+  const url = document.getElementById("url").value.trim();
+  const section = document.getElementById("section").value;
+  const btn = document.getElementById("addbtn"), err = document.getElementById("err");
+  err.textContent = ""; if(!url) return;
+  btn.disabled = true;
+  try{
+    const d = await (await fetch("/tools",{method:"POST",headers:{"Content-Type":"application/json"},
+                                           body:JSON.stringify({url,section})})).json();
+    if(d.error){ err.textContent = d.error;
+                 if(d.need_token){ showSettings = true; loadSettings(); } }
+    else { tools.set(d.id,d); open.add(d.id); logs.set(d.id,""); document.getElementById("url").value=""; render(); }
+  }catch(e){ err.textContent = "request failed"; }
+  btn.disabled = false;
+}
+const retry = id => fetch(`/tools/${id}/retry`,{method:"POST"});
+const drop  = id => confirm(`Remove ${id}?`) && fetch(`/tools/${id}`,{method:"DELETE"});
+function toggle(id){ open.has(id) ? open.delete(id) : open.add(id); render(); }
+function setPane(id, pane){ tabs.set(id, pane); render(); }
+
+async function doRun(id){
+  const command = document.getElementById("cmd-"+id).value.trim();
+  if(!command) return;
+  const t = tools.get(id); if(t) t.last_command = command;   // keep it on re-render
+  runs.set(id, {busy:true}); runout.set(id, ""); render();
+  try{
+    const d = await (await fetch(`/tools/${id}/run`,{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({command})})).json();
+    if(d.error){ runs.set(id, {error:d.error}); render(); }
+    // success: output arrives via run_log/run_done on the event stream
+  }catch(e){ runs.set(id, {error:"request failed"}); render(); }
+}
+const doStop = id => fetch(`/tools/${id}/stop`,{method:"POST"});
+async function refreshHelp(id){
+  const d = await (await fetch(`/tools/${id}/help`,{method:"POST"})).json();
+  const t = tools.get(id);
+  if(t && d.help_text !== undefined){ t.help_text = d.help_text; render(); }
+}
+function paintRun(id){
+  const p = document.getElementById("run-"+id);
+  if(!p){ render(); return; }
+  p.innerHTML = ansiToHtml(clip(runout.get(id)));
+  p.scrollTop = p.scrollHeight;
+}
+
+/* ---- render ---- */
+function render(){
+  const el = document.getElementById("list");
+  const list = [...tools.values()].sort((a,b)=>b.created_at-a.created_at);
+  if(!list.length){ el.innerHTML = '<div class="empty">Nothing added yet.</div>'; return; }
+  el.innerHTML = list.map(t=>{
+    const working = ACTIVE.includes(t.status);
+    const wait = (t.status==="queued" && t.queue_position>0) ? ` (position ${t.queue_position})` : "";
+    const badge = `<span class="badge ${t.status}">${working?'<span class="spin"></span> ':''}${t.status}${wait}</span>`;
+    const actions = t.status==="failed" ? `<button class="ghost" onclick="event.stopPropagation();retry('${t.id}')">Retry</button>` : "";
+    const detail = t.detail ? `<div class="sub">${esc(t.detail)}</div>` : "";
+    const tab = tabs.get(t.id) || (t.status==="ready" ? "run" : "log");
+    const r = runs.get(t.id);
+    const busy = !!(r && r.busy);
+    // Only suggest a command when a real target flag was documented. A bare
+    // "<tool> example.com" guess is worse than no guess — it teaches the wrong
+    // invocation (bbot actually needs -t).
+    const tmpl = t.run_template || "";
+    const hint = /^\S+\s+-/.test(tmpl)
+      ? tmpl.replace("{{target}}", "example.com")
+      : `type a command — check --help →`;
+    let footer = "";
+    if (busy)             footer = `<span class="running">running…</span>`;
+    else if (r && r.error) footer = `<span class="err">${esc(r.error)}</span>`;
+    else if (r && r.code !== undefined)
+      footer = `<span class="${r.code===0?'exit0':'exitN'}">exit ${r.code}</span>` +
+               ((r.files&&r.files.length) ? ` <span class="sub">· files: ${r.files.map(f=>esc(f.name)+" ("+f.bytes+"b)").join(", ")}</span>` : "");
+
+    const runPane = `
+      <div class="runbox">
+        <div class="lbl"><span>command</span><span class="sub">runs inside ${esc(t.image)}</span></div>
+        <div class="fields">
+          <input id="cmd-${t.id}" value="${esc(t.last_command||"")}" placeholder="${esc(hint)}"
+                 onkeydown="if(event.key==='Enter')doRun('${t.id}')">
+          ${busy
+            ? `<button class="stop" onclick="doStop('${t.id}')">Stop</button>`
+            : `<button onclick="doRun('${t.id}')">Run</button>`}
+        </div>
+        <div class="split">
+          <div>
+            <div class="lbl" style="margin-top:10px"><span>output</span>${footer}</div>
+            <pre class="term" id="run-${t.id}">${ansiToHtml(clip(runout.get(t.id)))}</pre>
+          </div>
+          <div>
+            <div class="lbl" style="margin-top:10px"><span>--help</span>
+              <span class="sub" style="cursor:pointer;color:var(--accent)"
+                    onclick="refreshHelp('${t.id}')">refresh</span></div>
+            <pre class="term">${t.help_text ? ansiToHtml(t.help_text) : esc("(no help captured — try running `"+t.id+" --help` above)")}</pre>
+          </div>
+        </div>
+      </div>`;
+    const infoPane = `
+      <div class="body">
+        <div class="kv">
+          <div>source</div><div><code>${esc(t.source_url)}</code></div>
+          <div>section</div><div>${esc(t.section)}</div>
+          <div>strategy</div><div>${esc(t.strategy||"—")}</div>
+          <div>image</div><div><code>${esc(t.image||"—")}</code></div>
+          <div>install</div><div><code>${esc(t.install_cmd||"—")}</code></div>
+          <div>commit</div><div><code>${esc(t.resolved_ref||"—")}</code> ${t.argv_mode?("· argv "+esc(t.argv_mode)):""}</div>
+        </div>
+        <pre class="term" id="log-${t.id}">${ansiToHtml(clip(logs.get(t.id)))}</pre>
+      </div>`;
+    const tabBar = t.status==="ready" ? `<div class="body" style="padding-bottom:0">
+        <div class="tabs">
+          <a class="${tab==='run'?'on':''}" onclick="setPane('${t.id}','run')">Run</a>
+          <a class="${tab==='log'?'on':''}" onclick="setPane('${t.id}','log')">Setup log</a>
+        </div></div>` : "";
+    const bodyHtml = !open.has(t.id) ? ""
+      : t.status!=="ready" ? infoPane
+      : tabBar + (tab==="run" ? runPane : infoPane);
+    return `<div class="card">
+      <div class="top" onclick="toggle('${t.id}')">
+        <div><span class="nm">${esc(t.id)}</span>${detail}</div>
+        <div class="right">${badge}${actions}
+          <button class="ghost" onclick="event.stopPropagation();drop('${t.id}')">✕</button></div>
+      </div>${bodyHtml}</div>`;
+  }).join("");
+  // keep logs scrolled to the newest line
+  tools.forEach((t,id)=>{ const p=document.getElementById("log-"+id); if(p) p.scrollTop=p.scrollHeight; });
+}
+function paintLog(id){
+  const p = document.getElementById("log-"+id);
+  if(!p){ render(); return; }
+  p.innerHTML = ansiToHtml(clip(logs.get(id)));
+  p.scrollTop = p.scrollHeight;
+}
+
+/* ---- settings ---- */
+let cfg = {has_token:false};
+let showSettings = false;
+
+async function loadSettings(){
+  try{ cfg = await (await fetch("/settings")).json(); }catch(e){}
+  if(!cfg.has_token) showSettings = true;   // can't add tools without it
+  renderSettings();
+}
+function toggleSettings(){ showSettings = !showSettings; renderSettings(); }
+
+function renderSettings(){
+  const el = document.getElementById("settings");
+  const envLocked = cfg.source === "environment";
+  const status = cfg.has_token
+    ? `<span class="exit0">token set</span> <span class="sub">${esc(cfg.masked)} · from ${esc(cfg.source)}</span>`
+    : `<span class="exitN">no token — adding tools is disabled</span>`;
+
+  const panel = !showSettings ? "" : `
+    <div class="card" style="padding:14px">
+      ${!cfg.has_token ? `<div class="sub" style="margin-bottom:10px">
+        A GitHub token is required. Unauthenticated GitHub allows only ~60 API
+        requests/hour and heavy use can get your IP temporarily blocked. A
+        <b>fine-grained token with no scopes</b> is enough for public repos:
+        GitHub → Settings → Developer settings → Personal access tokens.
+      </div>` : ""}
+      ${envLocked ? `<div class="sub">Set by an environment variable — edit that to change it.</div>` : `
+        <div class="addrow">
+          <input id="tok" type="password" placeholder="github_pat_… or ghp_…"
+                 onkeydown="if(event.key==='Enter')saveToken()">
+          <button onclick="saveToken()">Save</button>
+          ${cfg.has_token ? `<button class="ghost" onclick="clearToken()">Remove</button>` : ""}
+        </div>`}
+      <div class="sub" id="tokmsg" style="margin-top:8px">${esc(cfg.quota||"")}</div>
+    </div>`;
+
+  el.innerHTML = `<h2 style="display:flex;justify-content:space-between">
+      <span>Settings · GitHub</span>
+      <span style="cursor:pointer;color:var(--accent)" onclick="toggleSettings()">
+        ${showSettings ? "hide" : "edit"}</span></h2>
+    <div class="sub" style="margin:-4px 0 8px">${status}</div>${panel}`;
+
+  // gate the Add button on having a token
+  const btn = document.getElementById("addbtn");
+  if(btn){ btn.disabled = !cfg.has_token;
+           btn.title = cfg.has_token ? "" : "add a GitHub token first"; }
+}
+
+async function saveToken(){
+  const input = document.getElementById("tok");
+  const msg = document.getElementById("tokmsg");
+  if(!input || !input.value.trim()) return;
+  msg.textContent = "checking with GitHub…";
+  try{
+    const d = await (await fetch("/settings",{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({github_token:input.value.trim()})})).json();
+    cfg = d;
+    renderSettings();
+    const m = document.getElementById("tokmsg");
+    if(m) m.innerHTML = (d.ok ? '<span class="exit0">✓ ' : '<span class="exitN">')
+                      + esc(d.detail||"") + "</span>";
+    if(d.has_token) showSettings = false, renderSettings();
+  }catch(e){ msg.textContent = "request failed"; }
+}
+async function clearToken(){
+  if(!confirm("Remove the saved GitHub token? Adding tools will be disabled.")) return;
+  cfg = await (await fetch("/settings",{method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({github_token:""})})).json();
+  showSettings = true; renderSettings();
+}
+
+fetch("/tools").then(r=>r.json()).then(d=>{
+  document.getElementById("dock").textContent = d.queue_depth ? `queue: ${d.queue_depth}` : "";
+});
+loadSettings();
+connect();
+</script>
+</body>
+</html>

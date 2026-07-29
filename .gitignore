@@ -1,0 +1,10 @@
+# Secrets — never commit. Contains your GitHub token.
+data/settings.json
+
+# Local state
+data/tools/
+data/cache/
+
+__pycache__/
+*.pyc
+.DS_Store
