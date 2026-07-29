@@ -5,8 +5,11 @@
     POST /tools               {url, section} -> id immediately, setup runs in background
     GET  /tools/{id}/log      full setup log (for reload)
     GET  /events              SSE: status transitions + live build log lines
+    GET  /tools/{id}/prompt   a ready-to-paste prompt describing the failure
+    POST /tools/{id}/install  supply the recipe yourself when none could be derived
     POST /tools/{id}/retry    re-run setup for a failed tool
     DELETE /tools/{id}        drop the record (and its image)
+    DELETE /tools             drop everything, including cached repo signals
 
 `POST /tools` never blocks: docker builds take minutes, so it enqueues and returns.
 """
@@ -18,24 +21,26 @@ import os
 import sys
 from pathlib import Path
 
-from penstation import dockerops as D
-from penstation import store
-from penstation.events import bus
-from penstation import gather as gather_mod
+# app shell
 from penstation import settings
-from penstation.gather import GatherError, parse_url
-from penstation.jobs import JobQueue
-from penstation.llm import make_provider
-from penstation.pipeline import Pipeline
-from penstation import runner
-from penstation.runner import RunError
-from penstation.validate import validate_command
+from penstation.events import bus
+
+# the add-a-tool feature
+from penstation.addtool import dockerops as D
+from penstation.addtool import gather as gather_mod
+from penstation.addtool import handoff
+from penstation.addtool import runner, store
+from penstation.addtool.gather import GatherError, parse_url
+from penstation.addtool.jobs import JobQueue
+from penstation.addtool.pipeline import Pipeline
+from penstation.addtool.runner import RunError
+from penstation.addtool.validate import (validate_command, validate_dockerfile,
+                                          validate_install)
 
 WEB = Path(__file__).parent / "web"
 
-# LLM comes from config/env (PENSTATION_LLM=ollama). Optional by design.
-llm = make_provider()
-queue = JobQueue(Pipeline(llm))
+# The Pipeline is fully deterministic — no model, no configuration.
+queue = JobQueue(Pipeline())
 
 
 # -- HTTP plumbing ----------------------------------------------------
@@ -158,7 +163,8 @@ def _settings_state() -> dict:
     return {"has_token": bool(tok),
             "masked": settings.masked(tok),
             "source": settings.token_source(),
-            "quota": gather_mod.quota_note()}
+            "quota": gather_mod.quota_note(),
+            }
 
 
 async def _add_tool(payload: dict) -> dict:
@@ -232,16 +238,24 @@ def make_handler():
                 tok = (_json_body(body).get("github_token") or "").strip()
                 if not tok:
                     settings.set_github_token("")
-                    writer.write(_ok({**_settings_state(), "detail": "token cleared"}))
+                    writer.write(_ok({**_settings_state(), "saved": True,
+                                      "detail": "token cleared"}))
                 else:
                     check = await asyncio.to_thread(gather_mod.check_token, tok)
                     # Save unless GitHub explicitly rejected it — a network blip
                     # shouldn't throw away a token the user just pasted.
-                    if check["ok"] or check.get("unreachable"):
+                    saved = bool(check["ok"] or check.get("unreachable"))
+                    if saved:
                         settings.set_github_token(tok)
                         out(_paint(f"github token saved "
                                    f"({settings.masked(tok)}) — {check['detail']}", "green"))
-                    writer.write(_ok({**_settings_state(), **check}))
+                    else:
+                        # Be loud: the UI must not mistake this for success.
+                        out(_paint(f"github token NOT saved — {check['detail']}", "red"))
+                    # `saved` is the authoritative signal for the UI; `has_token`
+                    # only reports whether *any* token is stored.
+                    writer.write(_ok({**_settings_state(), **check, "saved": saved}))
+
 
             elif method == "GET" and path == "/tools":
                 writer.write(_ok({"tools": [t.to_dict() for t in store.load_all()],
@@ -287,6 +301,40 @@ def make_handler():
                     bus.publish("status", rec.to_dict())
                     writer.write(_ok({"help_text": rec.help_text}))
 
+            elif (method == "GET" and len(parts) == 3
+                  and parts[0] == "tools" and parts[2] == "prompt"):
+                rec = store.load(parts[1])
+                writer.write(_ok({"prompt": handoff.prompt_for(rec, rec.tried)}
+                                 if rec else {"error": "unknown tool"}))
+
+            elif (method == "POST" and len(parts) == 3
+                  and parts[0] == "tools" and parts[2] == "install"):
+                # You supplying the recipe when the ladder couldn't derive one.
+                rec = store.load(parts[1])
+                p = _json_body(body)
+                cmd = (p.get("install_cmd") or "").strip()
+                dockerfile = (p.get("dockerfile") or "").strip()
+                if rec is None:
+                    writer.write(_ok({"error": "unknown tool"}))
+                elif not cmd and not dockerfile:
+                    writer.write(_ok({"error": "nothing provided"}))
+                else:
+                    # Same gates as any derived recipe, minus the "must name the
+                    # repo" rule — you are the authority on your own input, but
+                    # shell-injection hygiene still applies.
+                    check = (validate_dockerfile(dockerfile) if dockerfile
+                             else validate_install(cmd))
+                    if not check:
+                        writer.write(_ok({"error": check.reason}))
+                    else:
+                        rec.manual_install, rec.manual_dockerfile = cmd, dockerfile
+                        rec.save()
+                        rec.append_log(f"\n--- using the recipe you provided ---\n"
+                                       f"{dockerfile or cmd}\n")
+                        out(_paint(f"[{rec.id}] manual recipe supplied", "green"))
+                        queue.submit(rec)
+                        writer.write(_ok(rec.to_dict()))
+
             elif method == "POST" and len(parts) == 3 and parts[0] == "tools" and parts[2] == "retry":
                 rec = store.load(parts[1])
                 if rec is None:
@@ -295,6 +343,22 @@ def make_handler():
                     rec.append_log("\n--- retry ---\n")
                     queue.submit(rec)
                     writer.write(_ok(rec.to_dict()))
+
+            elif method == "DELETE" and len(parts) == 1 and parts[0] == "tools":
+                # Start fresh: every record, its image, its per-tool volume, and
+                # the cached repo signals. Destructive, so the UI confirms first.
+                removed = []
+                for rec in store.load_all():
+                    if rec.image and rec.strategy != "docker-pull":
+                        await D.remove_image(rec.image)
+                    await D.remove_volume(f"penstation-home-{rec.id}")
+                    if store.delete(rec.id):
+                        removed.append(rec.id)
+                    bus.publish("removed", {"id": rec.id})
+                cached = gather_mod.clear_cache()
+                out(_paint(f"cleared {len(removed)} tool(s) and {cached} cached "
+                           f"repo signal(s)", "yellow"))
+                writer.write(_ok({"removed": removed, "cache": cached}))
 
             elif method == "DELETE" and len(parts) == 2 and parts[0] == "tools":
                 rec = store.load(parts[1])
@@ -339,13 +403,6 @@ async def serve(host: str, port: int, mirror: bool = True) -> None:
     else:
         out(_paint("github: NO TOKEN — adding tools is disabled. Add one in "
                    "Settings in the web UI (or set PENSTATION_GITHUB_TOKEN).", "red"))
-    if llm.name == "none":
-        out("llm: none — deterministic extraction only "
-            "(set PENSTATION_LLM=ollama to enable inference + build repair)")
-    elif llm.available():
-        out(f"llm: {llm.name} ✓")
-    else:
-        out(_paint(f"llm: {llm.name} unreachable — using deterministic extraction", "yellow"))
     out(f"penstation  →  http://{host}:{port}")
     out(_paint("watching for tool activity… (setup output appears below)", "dim"))
 

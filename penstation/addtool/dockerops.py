@@ -10,6 +10,7 @@ watch a multi-minute build live instead of waiting for a blob at the end.
 from __future__ import annotations
 
 import asyncio
+import re
 from typing import Callable, Sequence
 
 OnLine = Callable[[str], None]
@@ -146,14 +147,35 @@ async def entrypoint_of(image: str) -> list[str]:
 HELP_TIMEOUT = 30.0
 
 
-async def capture_help(image: str) -> str:
-    """Grab the tool's own --help text, for on-screen guidance.
+# Help flags, in the order worth trying. All three are unambiguously flags —
+# a bare `help` subcommand is deliberately excluded because a scanner would read
+# it as a positional target and start working. If a tool needs something else
+# (`amass enum -h`), you can just type it in the run box.
+HELP_FLAGS = ("--help", "-h", "-help")
 
-    Tries `--help` then `-h`. Output is kept even on a non-zero exit — plenty of
-    tools print usage to stderr and exit 1 or 2. No-argument invocation is
-    deliberately NOT tried: for a scanner that could start doing work.
+
+_HELPISH = re.compile(r"\busage\b|\boptions\b|\bflags\b|^\s*-{1,2}\w", re.I | re.M)
+
+
+def _help_score(text: str) -> tuple[int, int]:
+    """Rank a candidate: looking like help beats being long.
+
+    Length alone is a bad signal — hakrawler uses `-h` for custom Headers, so
+    `-h` returns a *longer* "flag needs an argument" error than the real usage
+    from `--help`. Prefer help-shaped output, then prefer more of it.
     """
-    for flag in ("--help", "-h"):
+    return (1 if _HELPISH.search(text or "") else 0, len(text or ""))
+
+
+async def capture_help(image: str) -> str:
+    """Grab the tool's own help text, for on-screen guidance.
+
+    Output is kept even on a non-zero exit — plenty of tools print usage to
+    stderr and exit 1 or 2. Stops early once a result convincingly looks like
+    usage, so slow tools don't pay for three container starts.
+    """
+    best, best_flag, best_score = "", "", (0, 0)
+    for flag in HELP_FLAGS:
         try:
             proc = await asyncio.create_subprocess_exec(
                 "docker", "run", "--rm", "--memory=512m", image, flag,
@@ -165,9 +187,12 @@ async def capture_help(image: str) -> str:
         except (asyncio.TimeoutError, OSError):
             continue
         text = out.decode(errors="replace").strip()
-        if text:
-            return f"$ {flag}\n\n{text}"
-    return ""
+        score = _help_score(text)
+        if score > best_score:
+            best, best_flag, best_score = text, flag, score
+        if score[0] and score[1] > 200:
+            break                       # convincingly real help — stop probing
+    return f"$ {best_flag}\n\n{best}" if best else ""
 
 
 async def kill_container(name: str) -> bool:

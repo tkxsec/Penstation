@@ -44,6 +44,9 @@ class ToolRecord:
     install_cmd: str = ""
     dockerfile: str = ""
     alt_install_cmd: str = ""    # generated-Dockerfile fallback if the repo's own build fails
+    manual_install: str = ""     # install command you supplied when the ladder found none
+    manual_dockerfile: str = ""  # a whole Dockerfile you supplied instead
+    tried: list = field(default_factory=list)   # recipe notes, for the handoff prompt
     run_template: str = ""       # extracted hint — shown as the input's placeholder
     last_command: str = ""       # what you last typed; pre-fills the run box
     argv_mode: str = ""          # entrypoint | argv (set at verify)
@@ -53,7 +56,7 @@ class ToolRecord:
     output_format: str = "stdout"
     status: str = "queued"
     detail: str = ""             # short human-readable status/error line
-    llm_attempts: int = 0
+    llm_attempts: int = 0   # legacy field, kept so old records still load
     queue_position: int = 0      # >0 while waiting behind another build
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)

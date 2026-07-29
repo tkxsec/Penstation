@@ -18,7 +18,7 @@ import traceback
 from typing import Awaitable, Callable, Protocol
 
 from penstation.events import bus
-from penstation.store import ToolRecord
+from penstation.addtool.store import ToolRecord
 
 # A pipeline stage: given the record, do work (may append to its log).
 Stage = Callable[[ToolRecord], Awaitable[None]]
@@ -87,7 +87,7 @@ class JobQueue:
 
     def _renumber(self) -> None:
         """Keep queue_position honest for everyone still waiting (0 = next up)."""
-        from penstation import store
+        from penstation.addtool import store
         for i, tid in enumerate(self._pending):
             rec = store.load(tid)
             if rec and rec.queue_position != i:
@@ -97,7 +97,7 @@ class JobQueue:
                 self._emit("status", rec)
 
     async def _setup(self, tool_id: str) -> None:
-        from penstation import store
+        from penstation.addtool import store
         rec = store.load(tool_id)
         if rec is None:
             return

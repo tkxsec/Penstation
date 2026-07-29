@@ -23,9 +23,9 @@ import time
 from pathlib import Path
 from typing import Callable
 
-from penstation import dockerops as D
-from penstation.store import ToolRecord
-from penstation.validate import validate_command
+from penstation.addtool import dockerops as D
+from penstation.addtool.store import ToolRecord
+from penstation.addtool.validate import validate_command
 
 OnLine = Callable[[str], None]
 
