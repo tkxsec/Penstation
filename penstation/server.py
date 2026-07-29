@@ -7,6 +7,8 @@
     GET  /events              SSE: status transitions + live build log lines
     GET  /tools/{id}/prompt   a ready-to-paste prompt describing the failure
     POST /tools/{id}/install  supply the recipe yourself when none could be derived
+    GET  /projects            engagements + their section/tool assignments
+    POST /projects            create one
     POST /tools/{id}/retry    re-run setup for a failed tool
     DELETE /tools/{id}        drop the record (and its image)
     DELETE /tools             drop everything, including cached repo signals
@@ -22,7 +24,7 @@ import sys
 from pathlib import Path
 
 # app shell
-from penstation import settings
+from penstation import projects, runs, settings
 from penstation.events import bus
 
 # the add-a-tool feature
@@ -175,7 +177,8 @@ async def _add_tool(payload: dict) -> dict:
                          "Add one in Settings.", "need_token": True}
 
     url = (payload.get("url") or "").strip()
-    section = (payload.get("section") or "").strip() or "unsorted"
+    section = (payload.get("section") or "").strip() or "reconnaissance"
+    proj = projects.load((payload.get("project") or "").strip()) or projects.ensure_default()
     try:
         owner, repo = parse_url(url)
     except GatherError as exc:
@@ -183,7 +186,13 @@ async def _add_tool(payload: dict) -> dict:
 
     tool_id = store.slug(repo)
     if store.exists(tool_id):
-        return {"error": f"'{tool_id}' already added"}
+        # The image already exists in the library — nothing to build, just file
+        # it into this engagement. Rebuilding a shared image per project would
+        # cost minutes for an identical artifact.
+        if proj.assign(section, tool_id):
+            proj.save()
+            return {**(store.load(tool_id).to_dict()), "assigned": True}
+        return {"error": f"'{tool_id}' is already in this section"}
 
     # Fail fast if Docker isn't available — better than a confusing build error.
     try:
@@ -192,24 +201,42 @@ async def _add_tool(payload: dict) -> dict:
         return {"error": str(exc)}
 
     rec = store.create(f"https://github.com/{owner}/{repo}", section, tool_id)
+    proj.assign(section, tool_id)
+    proj.save()
     queue.submit(rec)
     return rec.to_dict()
 
 
-async def _do_run(rec, command: str) -> None:
-    """Run in the background, streaming output to the bus (UI + terminal)."""
-    bus.publish("run_start", {"id": rec.id, "command": command})
-    on_line = lambda line: bus.publish("run_log", {"id": rec.id, "line": line})
+async def _do_run(rec, command: str, project: str, section: str) -> None:
+    """Run in the background, streaming output to the bus and to disk.
+
+    Output is written under the engagement as it arrives rather than at the end,
+    so a scan killed halfway still leaves the evidence it produced.
+    """
+    import time
+    run = runs.start(project, rec.id, section, command)
+    bus.publish("run_start", {"id": rec.id, "command": command, "run": run.id})
+
+    def on_line(line: str) -> None:
+        run.append(line)
+        bus.publish("run_log", {"id": rec.id, "line": line})
+
     try:
         result = await runner.run_command(rec, command, on_line)
+        run.exit_code, run.files = result["code"], result["files"]
         bus.publish("run_done", {"id": rec.id, "code": result["code"],
                                  "command": result["command"],
-                                 "files": result["files"]})
+                                 "files": result["files"], "run": run.id})
     except RunError as exc:
+        run.exit_code, run.error = -1, str(exc)
         bus.publish("run_done", {"id": rec.id, "code": -1, "error": str(exc)})
     except Exception as exc:  # never let a run take the server down
+        run.exit_code, run.error = -1, f"unexpected error: {exc}"
         bus.publish("run_done", {"id": rec.id, "code": -1,
                                  "error": f"unexpected error: {exc}"})
+    finally:
+        run.finished_at = time.time()
+        run.save()
 
 
 def make_handler():
@@ -284,7 +311,11 @@ def make_handler():
                     # Remember the command so the box is pre-filled next time.
                     rec.last_command = command
                     rec.save()
-                    asyncio.create_task(_do_run(rec, command))
+                    p = _json_body(body)
+                    proj = (projects.load((p.get("project") or "").strip())
+                            or projects.ensure_default())
+                    asyncio.create_task(_do_run(rec, command, proj.id,
+                                                (p.get("section") or "").strip()))
                     writer.write(_ok({"ok": True}))
 
             elif method == "POST" and len(parts) == 3 and parts[0] == "tools" and parts[2] == "stop":
@@ -335,6 +366,69 @@ def make_handler():
                         queue.submit(rec)
                         writer.write(_ok(rec.to_dict()))
 
+            elif (method == "GET" and len(parts) == 4 and parts[0] == "projects"
+                  and parts[2] == "runs"):
+                # Every recorded run of one tool in this engagement.
+                writer.write(_ok({"runs": [r.to_dict()
+                                           for r in runs.for_tool(parts[1], parts[3])]}))
+
+            elif (method == "GET" and len(parts) == 5 and parts[0] == "projects"
+                  and parts[2] == "runs"):
+                r = runs.load(parts[1], parts[4])
+                writer.write(_ok({**r.to_dict(), "output": r.output()} if r
+                                 else {"error": "unknown run"}))
+
+            elif method == "GET" and len(parts) == 1 and parts[0] == "projects":
+                writer.write(_ok({"projects": [p.to_dict() for p in projects.load_all()],
+                                  "types": sorted(projects.TYPES)}))
+
+            elif method == "POST" and len(parts) == 1 and parts[0] == "projects":
+                p = _json_body(body)
+                client = (p.get("client") or "").strip()
+                if not client:
+                    writer.write(_ok({"error": "a client name is required"}))
+                else:
+                    proj = projects.create(client, (p.get("scope") or "").strip(),
+                                           (p.get("kind") or "external").strip())
+                    out(_paint(f"project created: {proj.id} ({proj.kind})", "green"))
+                    writer.write(_ok(proj.to_dict()))
+
+            elif method in ("PATCH", "DELETE") and len(parts) == 2 and parts[0] == "projects":
+                proj = projects.load(parts[1])
+                if proj is None:
+                    writer.write(_ok({"error": "unknown project"}))
+                elif method == "DELETE":
+                    # Images are shared, so removing an engagement never
+                    # uninstalls anything — it only drops the assignments.
+                    projects.delete(parts[1])
+                    runs.forget_project(parts[1])
+                    writer.write(_ok({"ok": True}))
+                else:
+                    p = _json_body(body)
+                    for f in ("client", "scope", "kind", "notes"):
+                        if f in p:
+                            setattr(proj, f, (p.get(f) or "").strip())
+                    writer.write(_ok(proj.save().to_dict()))
+
+            elif (len(parts) >= 4 and parts[0] == "projects" and parts[2] == "sections"
+                  and method in ("POST", "DELETE")):
+                proj = projects.load(parts[1])
+                section = parts[3]
+                if proj is None:
+                    writer.write(_ok({"error": "unknown project"}))
+                elif method == "POST":
+                    tid = (_json_body(body).get("tool_id") or "").strip()
+                    if not store.load(tid):
+                        writer.write(_ok({"error": "unknown tool"}))
+                    else:
+                        proj.assign(section, tid)
+                        writer.write(_ok(proj.save().to_dict()))
+                else:
+                    # /projects/{id}/sections/{sec}/tools/{tool_id}
+                    tid = parts[5] if len(parts) > 5 else ""
+                    proj.unassign(section, tid)
+                    writer.write(_ok(proj.save().to_dict()))
+
             elif method == "POST" and len(parts) == 3 and parts[0] == "tools" and parts[2] == "retry":
                 rec = store.load(parts[1])
                 if rec is None:
@@ -354,6 +448,7 @@ def make_handler():
                     await D.remove_volume(f"penstation-home-{rec.id}")
                     if store.delete(rec.id):
                         removed.append(rec.id)
+                    projects.forget_tool(rec.id)
                     bus.publish("removed", {"id": rec.id})
                 cached = gather_mod.clear_cache()
                 out(_paint(f"cleared {len(removed)} tool(s) and {cached} cached "
@@ -366,6 +461,7 @@ def make_handler():
                     await D.remove_image(rec.image)   # only images we built
                 await D.remove_volume(f"penstation-home-{parts[1]}")
                 ok = store.delete(parts[1])
+                projects.forget_tool(parts[1])   # no dangling assignments
                 bus.publish("removed", {"id": parts[1]})
                 writer.write(_ok({"ok": ok}))
 
@@ -386,6 +482,7 @@ def make_handler():
 
 async def serve(host: str, port: int, mirror: bool = True) -> None:
     # A restart kills any in-flight build; don't leave those records spinning.
+    projects.ensure_default()      # adopt pre-project tools on first run
     orphans = store.reap_orphans()
     if orphans:
         out(_paint(f"reset {len(orphans)} interrupted setup(s): "

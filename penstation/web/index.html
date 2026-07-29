@@ -14,7 +14,60 @@
           display:flex; align-items:center; gap:12px; }
   h1{ margin:0; font-size:16px; letter-spacing:.5px; } h1 span{ color:var(--accent); }
   .dockstate{ font-size:12px; color:var(--dim); }
-  main{ max-width:940px; margin:0 auto; padding:22px 20px; }
+  .app{ display:grid; grid-template-columns:210px minmax(0,1fr); align-items:start; }
+  main{ min-width:0; padding:22px 20px; max-width:940px; }
+  nav{ position:sticky; top:0; padding:22px 0 22px 14px; }
+  nav a{ display:flex; justify-content:space-between; align-items:center; gap:8px;
+    padding:7px 12px; margin:1px 0; border-radius:6px; cursor:pointer;
+    color:var(--muted); font-size:13px; user-select:none; }
+  nav a:hover{ background:var(--panel); color:var(--fg); }
+  nav a.on{ background:var(--panel); color:var(--fg); font-weight:600;
+    box-shadow:inset 2px 0 0 var(--accent); }
+  nav .navgap{ height:14px; }
+  nav .count{ font-size:11px; color:var(--muted); font-weight:400; }
+  nav .dot{ width:7px; height:7px; border-radius:50%; background:var(--red);
+    flex:0 0 auto; }
+  /* Collapsed: a thin strip with just the re-open arrow. */
+  .app.narrow{ grid-template-columns:36px minmax(0,1fr); }
+  .app.narrow nav a{ display:none; }
+  .app.narrow nav .navgap{ display:none; }
+  .app.narrow nav{ padding-left:6px; }
+  /* Sits at the bottom of the sidebar, below Settings, pinned there even when
+     the nav is short. */
+  nav{ display:flex; flex-direction:column; min-height:calc(100vh - 52px); }
+  .pswitch{ position:relative; margin:0 6px 10px 0; }
+  .pswitch > a{ background:var(--panel); border:1px solid var(--line); }
+  .pmenu{ position:absolute; z-index:20; left:0; right:0; top:100%; margin-top:3px;
+    background:var(--panel); border:1px solid var(--line); border-radius:6px;
+    box-shadow:0 6px 18px rgba(0,0,0,.10); padding:4px; }
+  .app.narrow .pswitch{ display:none; }
+  .navtoggle{ display:flex; justify-content:flex-end; margin:auto 6px 8px 0;
+    padding-top:10px; }
+  .navtoggle button{ all:unset; cursor:pointer; color:var(--muted); font-size:15px;
+    line-height:1; padding:4px 6px; border-radius:5px; position:relative; }
+  .navtoggle button:hover{ background:var(--panel); color:var(--fg); }
+  .app.narrow .navtoggle{ justify-content:center; margin-right:0; }
+  .app.narrow nav{ min-height:calc(100vh - 52px); }
+  /* Collapsing hides the per-section spinners and dots, so any activity is
+     mirrored onto the toggle itself — otherwise a build failing behind a
+     collapsed sidebar is invisible. */
+  .navtoggle button .dot, .navtoggle button .spin{ position:absolute;
+    top:0; right:0; }
+
+  /* The sidebar stays a left column at every width — stacking it on top pushed
+     the tools down the page and lost the layout you navigate by. It just gets
+     narrower instead, and long labels ellipsize rather than wrap. */
+  nav a > span:first-child{ overflow:hidden; text-overflow:ellipsis;
+    white-space:nowrap; }
+  @media (max-width:780px){
+    .app{ grid-template-columns:150px minmax(0,1fr); }
+    nav{ padding:16px 0 16px 8px; }
+    nav a{ padding:6px 8px; font-size:12px; }
+    main{ padding:16px 14px; }
+  }
+  @media (max-width:520px){
+    .app{ grid-template-columns:118px minmax(0,1fr); }
+  }
   h2{ font-size:12px; text-transform:uppercase; letter-spacing:1px; color:var(--dim); margin:0 0 10px; }
   section{ margin-bottom:26px; }
   input, select, button{ font:inherit; }
@@ -39,6 +92,10 @@
   .badge.building,.badge.repairing,.badge.verifying{ color:var(--amber); border-color:var(--amber); }
   .badge.ready{ color:var(--green); border-color:var(--green); }
   .badge.failed{ color:var(--red); border-color:var(--red); }
+  .secthead{ display:flex; justify-content:space-between; align-items:baseline;
+    margin:18px 0 8px; font-size:11px; font-weight:600; letter-spacing:.08em;
+    text-transform:uppercase; color:var(--muted); }
+  .secthead:first-child{ margin-top:0; }
   .manual{ margin-top:12px; padding-top:12px; border-top:1px solid var(--line); }
   .manual textarea{ width:100%; box-sizing:border-box; font-family:ui-monospace,
     SFMono-Regular,Menlo,monospace; font-size:12px; padding:8px;
@@ -61,7 +118,16 @@
   pre.term::selection, pre.term ::selection{ background:#3b8eea; color:#fff; }
   .empty{ color:var(--dim); font-style:italic; }
   .runbox{ border-top:1px solid var(--border); padding:12px 14px; background:var(--panel); }
-  .runbox .lbl{ font-size:11px; text-transform:uppercase; letter-spacing:.5px; color:var(--dim);
+  table.hist{ width:100%; border-collapse:collapse; font-size:13px; }
+  table.hist tr{ cursor:pointer; border-bottom:1px solid var(--line); }
+  table.hist tr:hover{ background:var(--panel); }
+  table.hist td{ padding:6px 8px; vertical-align:top; }
+  table.hist td:first-child{ white-space:nowrap; font-variant-numeric:tabular-nums; }
+  .setrow{ display:flex; justify-content:space-between; align-items:baseline;
+    gap:12px; margin:-4px 0 6px; }
+  .setedit{ cursor:pointer; color:var(--accent); font-size:11px; font-weight:600;
+    letter-spacing:.5px; text-transform:uppercase; flex:0 0 auto; }
+  .lbl{ font-size:11px; text-transform:uppercase; letter-spacing:.5px; color:var(--dim);
                 margin-bottom:4px; display:flex; justify-content:space-between; }
   .runbox .fields{ display:flex; gap:8px; align-items:center; }
   .runbox input{ flex:1; font-family:ui-monospace,Menlo,monospace; font-size:12px; }
@@ -80,37 +146,111 @@
 </head>
 <body>
 <header>
-  <h1>pen<span>station</span> · add a tool</h1>
+  <h1>pen<span>station</span></h1>
   <span class="dockstate" id="dock"></span>
 </header>
+<div class="app" id="app">
+<nav id="nav"></nav>
 <main>
-  <section id="settings"></section>
-  <section>
-    <h2>Add a tool</h2>
+  <section id="v-settings" hidden></section>
+  <section id="v-add" hidden>
+    <h2>Add Tool</h2>
     <div class="addrow">
       <input id="url" placeholder="https://github.com/owner/repo" onkeydown="if(event.key==='Enter')add()">
       <select id="section">
         <option value="reconnaissance">Reconnaissance</option>
-        <option value="active-scanning">Active Scanning &amp; Discovery</option>
+        <option value="active-scanning">Active Scanning</option>
         <option value="web-analysis">Web Analysis</option>
-        <option value="information-exposure">Information Exposure</option>
         <option value="password-spraying">Password Spraying</option>
         <option value="exploitation">Exploitation</option>
       </select>
       <button id="addbtn" onclick="add()">Add</button>
     </div>
     <div class="err" id="err"></div>
-  </section>
-  <section>
-    <h2 style="display:flex;justify-content:space-between;align-items:baseline">
-      <span>Tools</span>
+    <h2 style="display:flex;justify-content:space-between;align-items:baseline;margin-top:26px">
+      <span>All tools</span>
       <span id="clearall" style="cursor:pointer;color:var(--red);font-size:12px;
             font-weight:400" onclick="clearAll()"></span></h2>
+    <div id="alllist"><div class="empty">Nothing added yet.</div></div>
+  </section>
+  <section id="v-project" hidden></section>
+  <section id="v-newproject" hidden>
+    <h2>New Project</h2>
+    <div class="card" style="padding:14px">
+      <div class="lbl"><span>client</span></div>
+      <input id="np-client" placeholder="ACME Corp" style="width:100%;box-sizing:border-box">
+      <div class="lbl" style="margin-top:10px"><span>scope</span></div>
+      <input id="np-scope" placeholder="*.acme.com, 203.0.113.0/24"
+             style="width:100%;box-sizing:border-box">
+      <div class="lbl" style="margin-top:10px"><span>engagement type</span></div>
+      <select id="np-kind"><option value="external">external</option></select>
+      <div class="fields" style="margin-top:12px">
+        <button onclick="createProject()">Create</button>
+        <span class="sub" id="np-msg"></span>
+      </div>
+    </div>
+  </section>
+  <section id="v-tools" hidden>
+    <h2 id="secttitle">Tools</h2>
     <div id="list"><div class="empty">Nothing added yet.</div></div>
   </section>
 </main>
+</div>
 
 <script>
+// Sections come from the engagement type, so they arrive with the project
+// rather than being hardcoded — an internal test runs through different phases.
+let PROJECTS = [];            // every engagement
+let proj = null;              // the one selected
+let SECTIONS = [];            // [key,label] for proj.kind
+let SECTION_LABEL = new Map();
+let switcherOpen = false;
+
+function applyProject(p){
+  proj = p || null;
+  SECTIONS = proj ? proj.section_list.map(s=>[s.key, s.label]) : [];
+  SECTION_LABEL = new Map(SECTIONS);
+}
+
+async function loadProjects(keep){
+  const d = await (await fetch("/projects")).json();
+  PROJECTS = d.projects || [];
+  const want = keep || (proj && proj.id) || (location.hash||"").slice(1).split("/")[0];
+  applyProject(PROJECTS.find(p=>p.id===want) || PROJECTS[0]);
+}
+
+// Tools this project has filed into a section, in the order they were added.
+function toolsIn(section){
+  if(!proj) return [];
+  return (proj.sections[section]||[]).map(id=>tools.get(id)).filter(Boolean);
+}
+
+// Which panel is showing: "add", "settings", or a section key. Kept in the URL
+// hash so a reload lands you back where you were — with builds this slow, and
+// the amount of refreshing that goes on, losing your place is a real cost.
+let view = ((location.hash || "").slice(1).split("/")[1]) || "";
+let navOpen = localStorage.getItem("navOpen") !== "0";
+
+function toggleNav(){
+  navOpen = !navOpen;
+  localStorage.setItem("navOpen", navOpen ? "1" : "0");
+  renderNav();
+}
+
+function setView(v){
+  view = v;
+  if(!navOpen) toggleNav();
+  switcherOpen = false;
+  history.replaceState(null, "", "#" + (proj?proj.id:"") + "/" + v);
+  render();
+}
+
+async function switchProject(id){
+  await loadProjects(id);
+  switcherOpen = false;
+  setView(SECTIONS.length ? SECTIONS[0][0] : "project");
+}
+
 const tools = new Map();      // id -> record
 const logs  = new Map();      // id -> accumulated log text
 const open  = new Set();      // expanded cards
@@ -249,14 +389,33 @@ async function add(){
   btn.disabled = true;
   try{
     const d = await (await fetch("/tools",{method:"POST",headers:{"Content-Type":"application/json"},
-                                           body:JSON.stringify({url,section})})).json();
+                                           body:JSON.stringify({url, section, project: proj?proj.id:""})})).json();
     if(d.error){ err.textContent = d.error;
-                 if(d.need_token){ showSettings = true; loadSettings(); } }
-    else { tools.set(d.id,d); open.add(d.id); logs.set(d.id,""); document.getElementById("url").value=""; render(); }
+                 if(d.need_token){ showSettings = true; loadSettings(); setView("settings"); } }
+    else { tools.set(d.id,d); open.add(d.id); logs.set(d.id,"");
+           document.getElementById("url").value="";
+           setView(d.section);   // follow the tool into its section to watch it build
+    }
   }catch(e){ err.textContent = "request failed"; }
   btn.disabled = false;
 }
 const retry = id => fetch(`/tools/${id}/retry`,{method:"POST"});
+
+async function assignTool(){
+  const sel = document.getElementById("pick");
+  if(!sel.value) return;
+  await fetch(`/projects/${proj.id}/sections/${view}/tools`,{method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({tool_id: sel.value})});
+  await loadProjects(proj.id); render();
+}
+
+// Unassign only. The image stays installed and available to every other
+// engagement — uninstalling lives under Add Tool and asks first.
+async function unassign(id){
+  await fetch(`/projects/${proj.id}/sections/${view}/tools/${id}`,{method:"DELETE"});
+  await loadProjects(proj.id); render();
+}
 
 // Removes every record, image, per-tool volume and cached repo signal.
 async function clearAll(){
@@ -311,6 +470,48 @@ const drop  = id => confirm(`Remove ${id}?`) && fetch(`/tools/${id}`,{method:"DE
 function toggle(id){ open.has(id) ? open.delete(id) : open.add(id); render(); }
 function setPane(id, pane){ tabs.set(id, pane); render(); }
 
+// Every recorded run of this tool in this engagement. Output is stored, so a
+// scan from last week is still readable — that is the point of filing runs
+// under a client rather than leaving them in the browser.
+async function showHistory(id){
+  tabs.set(id, "hist"); render();
+  const box = document.getElementById(`hist-${id}`);
+  if(!box) return;
+  try{
+    const d = await (await fetch(`/projects/${proj.id}/runs/${id}`)).json();
+    const rs = d.runs || [];
+    box.innerHTML = rs.length ? `<table class="hist">${rs.map(r=>`
+      <tr onclick="showRun('${id}','${r.id}')">
+        <td class="${r.exit_code===0?'exit0':'exitN'}">${r.exit_code===0?"✓":"✕"} ${r.exit_code}</td>
+        <td><code>${esc(r.command)}</code></td>
+        <td class="sub">${ago(r.started_at)}</td>
+        <td class="sub">${r.duration}s</td>
+      </tr>`).join("")}</table>`
+      : `<div class="sub">No runs recorded for ${esc(id)} in this engagement yet.</div>`;
+  }catch(e){ box.innerHTML = `<div class="err">couldn't load history</div>`; }
+}
+
+async function showRun(id, runId){
+  const box = document.getElementById(`hist-${id}`);
+  const d = await (await fetch(`/projects/${proj.id}/runs/${id}/${runId}`)).json();
+  if(d.error){ box.innerHTML = `<div class="err">${esc(d.error)}</div>`; return; }
+  box.innerHTML = `
+    <div class="lbl"><span>${esc(d.command)}</span>
+      <span class="sub">${ago(d.started_at)} · ${d.duration}s ·
+        <span class="${d.exit_code===0?'exit0':'exitN'}">exit ${d.exit_code}</span></span></div>
+    <pre class="term">${ansiToHtml(d.output||"")}</pre>
+    <div class="sub" style="margin-top:8px;cursor:pointer;color:var(--accent)"
+         onclick="showHistory('${id}')">← back to history</div>`;
+}
+
+function ago(ts){
+  const s = Math.max(0, Date.now()/1000 - ts);
+  if(s < 60)    return `${Math.round(s)}s ago`;
+  if(s < 3600)  return `${Math.round(s/60)}m ago`;
+  if(s < 86400) return `${Math.round(s/3600)}h ago`;
+  return new Date(ts*1000).toLocaleDateString();
+}
+
 async function doRun(id){
   const command = document.getElementById("cmd-"+id).value.trim();
   if(!command) return;
@@ -319,7 +520,8 @@ async function doRun(id){
   try{
     const d = await (await fetch(`/tools/${id}/run`,{method:"POST",
       headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({command})})).json();
+      // The engagement and section are what make the recorded run attributable.
+      body:JSON.stringify({command, project: proj?proj.id:"", section: view})})).json();
     if(d.error){ runs.set(id, {error:d.error}); render(); }
     // success: output arrives via run_log/run_done on the event stream
   }catch(e){ runs.set(id, {error:"request failed"}); render(); }
@@ -332,18 +534,81 @@ async function refreshHelp(id){
 }
 function paintRun(id){
   const p = document.getElementById("run-"+id);
-  if(!p){ render(); return; }
+  if(!p) return;   // not on screen; the buffer paints when the view opens
   p.innerHTML = ansiToHtml(clip(runout.get(id)));
   p.scrollTop = p.scrollHeight;
 }
 
 /* ---- render ---- */
+function renderNav(){
+  const all = [...tools.values()];
+  const item = (key, label, extra) => {
+    const mine = toolsIn(key);
+    // A section counts what you can actually run there. Building and failing
+    // are install concerns, so their spinner and dot live on "Add Tool" —
+    // that is the view you would go to in order to do anything about them.
+    const ready = mine.filter(t=>t.status==="ready").length;
+    const mark = ready ? `<span class="count">${ready}</span>` : "";
+    return `<a class="${view===key?'on':''}" onclick="setView('${key}')">
+      <span>${label}</span>${extra||mark}</a>`;
+  };
+  const anyBusy = all.some(t=>ACTIVE.includes(t.status));
+  const anyBad  = all.some(t=>t.status==="failed");
+  const installMark = anyBusy ? '<span class="spin"></span>'
+                    : anyBad  ? '<span class="dot"></span>' : "";
+  const badge = navOpen ? "" : installMark;
+  document.getElementById("app").classList.toggle("narrow", !navOpen);
+
+  // The switcher names the engagement everything below is scoped to; without it
+  // the sections are ambiguous the moment there is more than one client.
+  const menu = !switcherOpen ? "" : `<div class="pmenu">
+    ${PROJECTS.map(p=>`<a class="${proj&&p.id===proj.id?'on':''}"
+        onclick="switchProject('${p.id}')"><span>${esc(p.label)}</span>
+        <span class="sub">${esc(p.kind)}</span></a>`).join("")}
+    <a onclick="setView('newproject')"><span>＋ New project</span></a>
+  </div>`;
+  const switcher = `<div class="pswitch">
+      <a onclick="switcherOpen=!switcherOpen;renderNav()">
+        <span><b>${esc(proj?proj.label:"No project")}</b><br>
+          <span class="sub">${esc(proj?proj.kind:"")}</span></span>
+        <span class="sub">▾</span></a>${menu}
+    </div>`;
+
+  document.getElementById("nav").innerHTML = switcher
+    + `<a class="${view==='project'?'on':''}" onclick="setView('project')"><span>Project</span></a>`
+    + `<div class="navgap"></div>`
+    + SECTIONS.map(([k,l])=>item(k,l)).join("")
+    + `<div class="navgap"></div>`
+    + `<a class="${view==='add'?'on':''}" onclick="setView('add')">
+         <span>+ Add Tool</span>${installMark}</a>`
+    + `<a class="${view==='settings'?'on':''}" onclick="setView('settings')"><span>Settings</span></a>`
+    + `<div class="navtoggle"><button onclick="toggleNav()"
+         title="${navOpen?'Collapse':'Expand'} sidebar">${navOpen?'‹':'›'}${badge}</button></div>`;
+}
+
 function render(){
-  const el = document.getElementById("list");
-  const list = [...tools.values()].sort((a,b)=>b.created_at-a.created_at);
+  // Start at the first phase of an engagement, whether or not it has tools yet.
+  if(!view){
+    view = SECTIONS[0][0];
+    history.replaceState(null, "", "#" + view);
+  }
+  renderNav();
+  const isSection = SECTION_LABEL.has(view);
+  document.getElementById("v-add").hidden        = view !== "add";
+  document.getElementById("v-settings").hidden   = view !== "settings";
+  document.getElementById("v-project").hidden    = view !== "project";
+  document.getElementById("v-newproject").hidden = view !== "newproject";
+  document.getElementById("v-tools").hidden      = !isSection;
+  if(view === "settings") renderSettings();
+  if(view === "project") renderProject();
   renderClear();
-  if(!list.length){ el.innerHTML = '<div class="empty">Nothing added yet.</div>'; return; }
-  el.innerHTML = list.map(t=>{
+  if(!isSection && view !== "add") return;
+  if(isSection) document.getElementById("secttitle").textContent = SECTION_LABEL.get(view);
+
+  // `card` is a const, so every use has to come after this point — calling it
+  // above threw a ReferenceError that silently aborted the rest of render(),
+  // leaving "All tools" stuck on its placeholder.
+  const card = (t, mode)=>{
     const working = ACTIVE.includes(t.status);
     const wait = (t.status==="queued" && t.queue_position>0) ? ` (position ${t.queue_position})` : "";
     const badge = `<span class="badge ${t.status}">${working?'<span class="spin"></span> ':''}${t.status}${wait}</span>`;
@@ -399,6 +664,7 @@ function render(){
           <div>install</div><div><code>${esc(t.install_cmd||"—")}</code></div>
           <div>commit</div><div><code>${esc(t.resolved_ref||"—")}</code> ${t.argv_mode?("· argv "+esc(t.argv_mode)):""}</div>
         </div>
+        <div class="lbl" style="margin-top:10px"><span>Setup Log</span></div>
         <pre class="term" id="log-${t.id}">${ansiToHtml(clip(logs.get(t.id)))}</pre>
         ${t.status!=="failed" ? "" : `
         <div class="manual">
@@ -417,29 +683,157 @@ function render(){
           </div>
         </div>`}
       </div>`;
-    const tabBar = t.status==="ready" ? `<div class="body" style="padding-bottom:0">
+    // Two surfaces, two jobs. "Add Tool" is where installs live: every tool,
+    // its setup log, retry and the paste box. A section is where you *use* the
+    // tool, so it shows only the run box — mixing them meant scrolling past
+    // build output to reach a command line.
+    const notReady = `<div class="body"><div class="sub">
+        ${esc(t.status)} — installs are managed under
+        <a style="color:var(--accent);cursor:pointer"
+           onclick="event.stopPropagation();setView('add')">Add Tool</a>.
+      </div></div>`;
+    // In a section the run box leads, but the setup log stays one click away —
+    // it is what you check when a tool misbehaves at runtime.
+    const tabBar = `<div class="body" style="padding-bottom:0">
         <div class="tabs">
           <a class="${tab==='run'?'on':''}" onclick="setPane('${t.id}','run')">Run</a>
-          <a class="${tab==='log'?'on':''}" onclick="setPane('${t.id}','log')">Setup log</a>
-        </div></div>` : "";
-    const bodyHtml = !open.has(t.id) ? ""
-      : t.status!=="ready" ? infoPane
-      : tabBar + (tab==="run" ? runPane : infoPane);
+          <a class="${tab==='log'?'on':''}" onclick="setPane('${t.id}','log')">Setup Log</a>
+          <a class="${tab==='hist'?'on':''}" onclick="showHistory('${t.id}')">History</a>
+        </div></div>`;
+    // A section is where you work, so its cards stay open — collapsing the run
+    // box behind a click is friction on the thing you came here to do. Add Tool
+    // keeps the fold: it lists everything, and setup logs are long.
+    const expanded = mode === "run" || open.has(t.id);
+    const bodyHtml = !expanded ? ""
+      : mode === "manage" ? infoPane
+      : t.status !== "ready" ? notReady
+      : tabBar + (tab === "run" ? runPane
+                : tab === "hist" ? `<div class="body"><div id="hist-${t.id}">
+                    <div class="sub">loading…</div></div></div>`
+                : infoPane);
     return `<div class="card">
-      <div class="top" onclick="toggle('${t.id}')">
+      <div class="top" ${mode === "manage" ? `onclick="toggle('${t.id}')"`
+                                           : 'style="cursor:default"'}>
         <div><span class="nm">${esc(t.id)}</span>${detail}</div>
         <div class="right">${badge}${actions}
-          <button class="ghost" onclick="event.stopPropagation();drop('${t.id}')">✕</button></div>
+          ${mode === "manage"
+            ? `<button class="ghost" title="Uninstall the image everywhere"
+                 onclick="event.stopPropagation();drop('${t.id}')">✕</button>`
+            : `<button class="ghost" title="Remove from this section (keeps the image)"
+                 onclick="event.stopPropagation();unassign('${t.id}')">⊖</button>`}</div>
       </div>${bodyHtml}</div>`;
-  }).join("");
+  };
+
+  // Group under section headings, in engagement order. Empty sections are
+  // hidden — an external test rarely uses every phase, and blank headers are
+  // just noise. Anything with an unrecognised section (an older record, or one
+  // whose section was retired) falls through to a final group rather than
+  // vanishing from the list.
+  if(view === "add"){
+    // Everything installed, newest first, with its setup log and controls.
+    const all = [...tools.values()].sort((a,b)=>b.created_at-a.created_at);
+    document.getElementById("alllist").innerHTML = all.length
+      ? all.map(t=>card(t,"manage")).join("")
+      : '<div class="empty">Nothing added yet.</div>';
+    return;
+  }
+  const el = document.getElementById("list");
+  const list = toolsIn(view);
+  // Everything installed that this section does not already have. Assigning is
+  // instant — the image is shared, so there is nothing to build.
+  const here = new Set(list.map(t=>t.id));
+  const spare = [...tools.values()].filter(t=>!here.has(t.id) && t.status==="ready");
+  const picker = `<div class="card" style="padding:10px 12px;margin-bottom:10px">
+      <div class="addrow">
+        <select id="pick" style="flex:1">
+          <option value="">＋ add an installed tool…</option>
+          ${spare.map(t=>`<option value="${t.id}">${esc(t.id)}</option>`).join("")}
+        </select>
+        <button onclick="assignTool()" ${spare.length?"":"disabled"}>Add</button>
+      </div>
+      ${spare.length ? "" : `<div class="sub" style="margin-top:6px">
+        Everything installed is already here — install more under
+        <a style="color:var(--accent);cursor:pointer" onclick="setView('add')">Add Tool</a>.
+      </div>`}
+    </div>`;
+  el.innerHTML = picker + (list.length
+    ? list.map(t=>card(t,"run")).join("")
+    : `<div class="empty">Nothing in ${SECTION_LABEL.get(view)} yet.</div>`);
   // keep logs scrolled to the newest line
   tools.forEach((t,id)=>{ const p=document.getElementById("log-"+id); if(p) p.scrollTop=p.scrollHeight; });
 }
 function paintLog(id){
   const p = document.getElementById("log-"+id);
-  if(!p){ render(); return; }
+  if(!p) return;   // not on screen; the buffer paints when the view opens
   p.innerHTML = ansiToHtml(clip(logs.get(id)));
   p.scrollTop = p.scrollHeight;
+}
+
+/* ---- projects ---- */
+function renderProject(){
+  const el = document.getElementById("v-project");
+  if(!proj){ el.innerHTML = "<h2>Project</h2><div class='empty'>No project.</div>"; return; }
+  const row = (label, value, field, placeholder) => `
+    <div class="setrow">
+      <div class="sub"><b>${label}</b> · ${value ? esc(value)
+        : `<span class="sub">not set</span>`}</div>
+      <span class="setedit" onclick="editField('${field}','${esc(placeholder)}')">edit</span>
+    </div>`;
+  el.innerHTML = `<h2>Project</h2>
+    ${row("Client", proj.client, "client", "ACME Corp")}
+    ${row("Scope", proj.scope, "scope", "*.acme.com, 203.0.113.0/24")}
+    <div class="setrow"><div class="sub"><b>Type</b> · ${esc(proj.kind)}</div></div>
+    ${row("Notes", proj.notes, "notes", "anything worth remembering")}
+    <div id="pedit"></div>
+    <div class="setrow" style="margin-top:20px">
+      <div class="sub">Deleting removes this engagement and its run history.
+        Installed tools are shared and stay in the library.</div>
+      <span class="setedit" style="color:var(--red)" onclick="deleteProject()">delete</span>
+    </div>`;
+}
+
+function editField(field, placeholder){
+  document.getElementById("pedit").innerHTML = `
+    <div class="card" style="padding:12px;margin-top:6px">
+      <div class="addrow">
+        <input id="pf" placeholder="${esc(placeholder)}" value="${esc(proj[field]||"")}"
+               style="flex:1" onkeydown="if(event.key==='Enter')saveField('${field}')">
+        <button onclick="saveField('${field}')">Save</button>
+      </div>
+    </div>`;
+  document.getElementById("pf").focus();
+}
+
+async function saveField(field){
+  const v = document.getElementById("pf").value;
+  const d = await (await fetch(`/projects/${proj.id}`,{method:"PATCH",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({[field]: v})})).json();
+  if(!d.error){ await loadProjects(proj.id); render(); }
+}
+
+async function createProject(){
+  const msg = document.getElementById("np-msg");
+  const client = document.getElementById("np-client").value.trim();
+  if(!client){ msg.textContent = "a client name is required"; return; }
+  msg.textContent = "creating…";
+  const d = await (await fetch("/projects",{method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({client, scope:document.getElementById("np-scope").value,
+                         kind:document.getElementById("np-kind").value})})).json();
+  if(d.error){ msg.textContent = d.error; return; }
+  document.getElementById("np-client").value = "";
+  document.getElementById("np-scope").value = "";
+  msg.textContent = "";
+  await switchProject(d.id);
+}
+
+async function deleteProject(){
+  if(!confirm(`Delete ${proj.label}?\n\nThis removes the engagement and its run `
+              + `history. Installed tools are shared and are not touched.`)) return;
+  await fetch(`/projects/${proj.id}`,{method:"DELETE"});
+  await loadProjects(null);
+  setView(SECTIONS.length ? SECTIONS[0][0] : "project");
 }
 
 /* ---- settings ---- */
@@ -454,7 +848,7 @@ async function loadSettings(){
 function toggleSettings(){ showSettings = !showSettings; renderSettings(); }
 
 function renderSettings(){
-  const el = document.getElementById("settings");
+  const el = document.getElementById("v-settings");
   const envLocked = cfg.source === "environment";
   const status = cfg.has_token
     ? `<span class="exit0">token set</span> <span class="sub">${esc(cfg.masked)} · from ${esc(cfg.source)}</span>`
@@ -478,11 +872,15 @@ function renderSettings(){
       <div class="sub" id="tokmsg" style="margin-top:8px">${esc(cfg.quota||"")}</div>
     </div>`;
 
-  el.innerHTML = `<h2 style="display:flex;justify-content:space-between">
-      <span>Settings</span>
-      <span style="cursor:pointer;color:var(--accent)" onclick="toggleSettings()">
-        ${showSettings ? "hide" : "edit"}</span></h2>
-    <div class="sub" style="margin:-4px 0 4px"><b>GitHub</b> · ${status}</div>
+  // Edit sits on the setting it edits, not on the page heading — there will be
+  // more than one setting here, and a single toggle at the top could not say
+  // which one it opens.
+  el.innerHTML = `<h2>Settings</h2>
+    <div class="setrow">
+      <div class="sub"><b>GitHub</b> · ${status}</div>
+      ${envLocked ? "" : `<span class="setedit" onclick="toggleSettings()">
+        ${showSettings ? "hide" : "edit"}</span>`}
+    </div>
     ${panel}`;
 
   // gate the Add button on having a token
@@ -524,8 +922,10 @@ async function clearToken(){
 fetch("/tools").then(r=>r.json()).then(d=>{
   document.getElementById("dock").textContent = d.queue_depth ? `queue: ${d.queue_depth}` : "";
 });
+// Projects first: the sidebar, section lists and run scoping all depend on
+// knowing which engagement is selected.
+loadProjects().then(()=>{ render(); connect(); });
 loadSettings();
-connect();
 </script>
 </body>
 </html>

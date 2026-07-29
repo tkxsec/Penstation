@@ -41,10 +41,17 @@ def token() -> str:
     return settings.github_token()
 
 
-def _headers() -> dict[str, str]:
+def _headers(host: str = _API) -> dict[str, str]:
+    """Request headers. Credentials go to GitHub and nowhere else.
+
+    The published-image probe talks to hub.docker.com through the same helper.
+    Attaching the GitHub token to that request sent the credential to a third
+    party, and Docker Hub answered 401 — which surfaced as "GitHub rejected the
+    token", so replacing the token could never fix it.
+    """
     h = {"User-Agent": "penstation", "Accept": "application/vnd.github+json"}
     tok = token()
-    if tok:
+    if tok and host == _API:
         h["Authorization"] = f"Bearer {tok}"
     return h
 
@@ -272,7 +279,7 @@ def _get(path: str, host: str = _API):
     # as if the GitHub token were nearly spent.
     mine = host == _API
     try:
-        req = urllib.request.Request(host + path, headers=_headers())
+        req = urllib.request.Request(host + path, headers=_headers(host))
         with urllib.request.urlopen(req, timeout=12) as resp:
             if mine:
                 _note_limits(resp.headers)
@@ -281,8 +288,10 @@ def _get(path: str, host: str = _API):
         if mine:
             _note_limits(exc.headers or {})
         # A bad token must not masquerade as "repo not found" — that sends you
-        # hunting for the wrong problem entirely.
-        if exc.code == 401:
+        # hunting for the wrong problem entirely. Only GitHub can reject a
+        # GitHub token, though: other hosts 401 for their own reasons and must
+        # not be reported as an auth problem you can fix.
+        if exc.code == 401 and mine:
             raise GatherError(
                 "GitHub rejected the token (401). Check or replace it in Settings."
             ) from None

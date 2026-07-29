@@ -1,0 +1,16 @@
+{
+  "id": "unassigned",
+  "client": "Unassigned",
+  "scope": "",
+  "kind": "external",
+  "notes": "",
+  "sections": {
+    "reconnaissance": [
+      "trufflehog",
+      "masscan",
+      "john"
+    ]
+  },
+  "created_at": 1785346879.9615738,
+  "updated_at": 1785346879.962275
+}

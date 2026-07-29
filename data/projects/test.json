@@ -1,0 +1,14 @@
+{
+  "id": "test",
+  "client": "test",
+  "scope": "test",
+  "kind": "external",
+  "notes": "",
+  "sections": {
+    "reconnaissance": [
+      "trufflehog"
+    ]
+  },
+  "created_at": 1785347709.579406,
+  "updated_at": 1785347720.700143
+}
