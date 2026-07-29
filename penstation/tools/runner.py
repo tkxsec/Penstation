@@ -23,14 +23,16 @@ import time
 from pathlib import Path
 from typing import Callable
 
-from penstation.addtool import dockerops as D
-from penstation.addtool.store import ToolRecord
-from penstation.addtool.validate import validate_command
+from penstation.tools import dockerops as D
+from penstation.tools.store import ToolRecord
+from penstation.tools.validate import validate_command
 
 OnLine = Callable[[str], None]
 
 DEFAULT_TIMEOUT = 1800.0     # 30 min — scanners legitimately run long
 CONTAINER_OUTDIR = "/out"
+INPUT_NAME = "input.txt"
+CONTAINER_INPUT = f"{CONTAINER_OUTDIR}/{INPUT_NAME}"
 LIMITS = ["--rm", "--memory=2g", "--cpus=2", "--pids-limit=1024"]
 
 # tool id -> container name, for Stop
@@ -61,8 +63,18 @@ def _strip_entrypoint(rec: ToolRecord, parts: list[str]) -> list[str]:
 
 
 def build_argv(rec: ToolRecord, command: str, name: str,
-               outdir_host: Path | None = None) -> list[str]:
+               outdir_host: Path | None = None,
+               has_input: bool = False) -> list[str]:
+    """Assemble the docker run argv.
+
+    `{{outdir}}` is where a tool writes; `{{input}}` is a file we wrote for it
+    to read. Nearly every tool in this space takes a list — httpx -l, nmap -iL,
+    nuclei -l, dnsx -l — so without an input path the output of one step cannot
+    become the input of the next.
+    """
     filled = command.replace("{{outdir}}", CONTAINER_OUTDIR)
+    if has_input:
+        filled = filled.replace("{{input}}", CONTAINER_INPUT)
     try:
         parts = shlex.split(filled)
     except ValueError as exc:
@@ -87,7 +99,16 @@ def build_argv(rec: ToolRecord, command: str, name: str,
 
 
 async def run_command(rec: ToolRecord, command: str, on_line: OnLine,
-                      timeout: float = DEFAULT_TIMEOUT) -> dict:
+                      timeout: float = DEFAULT_TIMEOUT,
+                      outdir_keep: Path | None = None,
+                      input_text: str = "") -> dict:
+    """Run a command in the tool's image.
+
+    `outdir_keep` is where files the tool writes to {{outdir}} should land. Pass
+    the run's own directory and they survive; omit it and a temp dir is used and
+    discarded — which is what used to happen unconditionally, so a run reported
+    files that had already been deleted by the time you could ask for them.
+    """
     if rec.status != "ready":
         raise RunError(f"tool is not ready (status: {rec.status})")
     if is_running(rec.id):
@@ -96,14 +117,26 @@ async def run_command(rec: ToolRecord, command: str, on_line: OnLine,
     if not check:
         raise RunError(check.reason)
 
+    # {{input}} needs the same mount {{outdir}} uses, so asking for either one
+    # gets you the directory.
+    wants_dir = "{{outdir}}" in command or "{{input}}" in command
     scratch: tempfile.TemporaryDirectory | None = None
     outdir: Path | None = None
-    if "{{outdir}}" in command:
-        scratch = tempfile.TemporaryDirectory(prefix="penstation-run-")
-        outdir = Path(scratch.name)
+    if wants_dir:
+        if outdir_keep is not None:
+            outdir_keep.mkdir(parents=True, exist_ok=True)
+            outdir = outdir_keep
+        else:
+            scratch = tempfile.TemporaryDirectory(prefix="penstation-run-")
+            outdir = Path(scratch.name)
+
+    has_input = bool(input_text) and "{{input}}" in command
+    if has_input and outdir is not None:
+        (outdir / INPUT_NAME).write_text(
+            input_text if input_text.endswith("\n") else input_text + "\n")
 
     name = _container_name(rec.id)
-    argv = build_argv(rec, command, name, outdir)
+    argv = build_argv(rec, command, name, outdir, has_input)
     _active[rec.id] = name
     on_line("$ " + " ".join(shlex.quote(a) for a in argv) + "\n")
 
@@ -148,7 +181,10 @@ async def run_command(rec: ToolRecord, command: str, on_line: OnLine,
         if outdir is not None:
             for p in sorted(outdir.rglob("*")):
                 if p.is_file():
-                    files.append({"name": p.name, "bytes": p.stat().st_size})
+                    # Path relative to the run dir, so a screenshot in a
+                    # subfolder is still addressable later.
+                    files.append({"name": str(p.relative_to(outdir)),
+                                  "bytes": p.stat().st_size})
         return {"command": " ".join(shlex.quote(a) for a in argv),
                 "code": code, "files": files}
     finally:

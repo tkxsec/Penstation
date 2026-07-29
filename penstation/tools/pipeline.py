@@ -20,12 +20,12 @@ import re
 import time
 from dataclasses import dataclass
 
-from penstation.addtool import dockerops as D
-from penstation.addtool import gather as G
-from penstation.addtool import validate as V
+from penstation.tools import dockerops as D
+from penstation.tools import gather as G
+from penstation.tools import validate as V
 from penstation.events import bus
-from penstation.addtool.jobs import SetupFailed
-from penstation.addtool.store import ToolRecord
+from penstation.tools.jobs import SetupFailed
+from penstation.tools.store import ToolRecord
 
 @dataclass
 class Candidate:

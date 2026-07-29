@@ -121,6 +121,18 @@
   table.hist{ width:100%; border-collapse:collapse; font-size:13px; }
   table.hist tr{ cursor:pointer; border-bottom:1px solid var(--line); }
   table.hist tr:hover{ background:var(--panel); }
+  table.hist tr.dim td{ opacity:.45; }
+  .promote{ margin-top:10px; }
+  .inwrap textarea{ width:100%; box-sizing:border-box; font-family:ui-monospace,
+    SFMono-Regular,Menlo,monospace; font-size:12px; padding:8px;
+    border:1px solid var(--line); border-radius:6px; background:var(--bg);
+    color:var(--fg); resize:vertical; }
+  .promoterows{ max-height:220px; overflow:auto; border:1px solid var(--line);
+    border-radius:6px; padding:6px; }
+  .promoterows label{ display:flex; align-items:center; gap:8px; padding:3px 4px;
+    border-radius:4px; cursor:pointer; }
+  .promoterows label:hover{ background:var(--panel); }
+  .promoterows label.oos code{ opacity:.6; }
   table.hist td{ padding:6px 8px; vertical-align:top; }
   table.hist td:first-child{ white-space:nowrap; font-variant-numeric:tabular-nums; }
   .setrow{ display:flex; justify-content:space-between; align-items:baseline;
@@ -174,6 +186,7 @@
     <div id="alllist"><div class="empty">Nothing added yet.</div></div>
   </section>
   <section id="v-project" hidden></section>
+  <section id="v-map" hidden></section>
   <section id="v-newproject" hidden>
     <h2>New Project</h2>
     <div class="card" style="padding:14px">
@@ -205,6 +218,9 @@ let proj = null;              // the one selected
 let SECTIONS = [];            // [key,label] for proj.kind
 let SECTION_LABEL = new Map();
 let switcherOpen = false;
+let mapData = {nodes:{}, edges:{}};
+let mapCount = 0;
+let showDismissed = false;
 
 function applyProject(p){
   proj = p || null;
@@ -367,8 +383,9 @@ function connect(){
   });
   es.addEventListener("run_done", e => {
     const d = JSON.parse(e.data);
-    runs.set(d.id, {code:d.code, files:d.files, error:d.error});
+    runs.set(d.id, {code:d.code, files:d.files, error:d.error, run:d.run});
     render();
+    if(d.run && !d.error) offerPromote(d.id, d.run);
   });
   es.addEventListener("removed", e => {
     const d = JSON.parse(e.data);
@@ -521,7 +538,8 @@ async function doRun(id){
     const d = await (await fetch(`/tools/${id}/run`,{method:"POST",
       headers:{"Content-Type":"application/json"},
       // The engagement and section are what make the recorded run attributable.
-      body:JSON.stringify({command, project: proj?proj.id:"", section: view})})).json();
+      body:JSON.stringify({command, project: proj?proj.id:"", section: view,
+                           input: (document.getElementById("in-"+id)||{}).value || ""})})).json();
     if(d.error){ runs.set(id, {error:d.error}); render(); }
     // success: output arrives via run_log/run_done on the event stream
   }catch(e){ runs.set(id, {error:"request failed"}); render(); }
@@ -576,6 +594,8 @@ function renderNav(){
 
   document.getElementById("nav").innerHTML = switcher
     + `<a class="${view==='project'?'on':''}" onclick="setView('project')"><span>Project</span></a>`
+    + `<a class="${view==='map'?'on':''}" onclick="setView('map')"><span>Map</span>
+         ${mapCount ? `<span class="count">${mapCount}</span>` : ""}</a>`
     + `<div class="navgap"></div>`
     + SECTIONS.map(([k,l])=>item(k,l)).join("")
     + `<div class="navgap"></div>`
@@ -597,10 +617,12 @@ function render(){
   document.getElementById("v-add").hidden        = view !== "add";
   document.getElementById("v-settings").hidden   = view !== "settings";
   document.getElementById("v-project").hidden    = view !== "project";
+  document.getElementById("v-map").hidden        = view !== "map";
   document.getElementById("v-newproject").hidden = view !== "newproject";
   document.getElementById("v-tools").hidden      = !isSection;
   if(view === "settings") renderSettings();
   if(view === "project") renderProject();
+  if(view === "map") loadMap();
   renderClear();
   if(!isSection && view !== "add") return;
   if(isSection) document.getElementById("secttitle").textContent = SECTION_LABEL.get(view);
@@ -636,15 +658,25 @@ function render(){
         <div class="lbl"><span>command</span><span class="sub">runs inside ${esc(t.image)}</span></div>
         <div class="fields">
           <input id="cmd-${t.id}" value="${esc(t.last_command||"")}" placeholder="${esc(hint)}"
+                 oninput="syncInputBox('${t.id}')"
                  onkeydown="if(event.key==='Enter')doRun('${t.id}')">
           ${busy
             ? `<button class="stop" onclick="doStop('${t.id}')">Stop</button>`
             : `<button onclick="doRun('${t.id}')">Run</button>`}
         </div>
+        <div id="inwrap-${t.id}" class="inwrap" ${/\{\{input\}\}/.test(t.last_command||"")?"":"hidden"}>
+          <div class="lbl" style="margin-top:10px"><span>input list</span>
+            <span class="sub" id="incount-${t.id}"></span></div>
+          <textarea id="in-${t.id}" rows="4" spellcheck="false"
+            oninput="countInput('${t.id}')"
+            placeholder="one per line — written to a file the tool reads as {{input}}"
+            >${esc(inbox.get(t.id)||"")}</textarea>
+        </div>
         <div class="split">
           <div>
             <div class="lbl" style="margin-top:10px"><span>output</span>${footer}</div>
             <pre class="term" id="run-${t.id}">${ansiToHtml(clip(runout.get(t.id)))}</pre>
+            <div id="promote-${t.id}" class="promote"></div>
           </div>
           <div>
             <div class="lbl" style="margin-top:10px"><span>--help</span>
@@ -767,6 +799,239 @@ function paintLog(id){
   if(!p) return;   // not on screen; the buffer paints when the view opens
   p.innerHTML = ansiToHtml(clip(logs.get(id)));
   p.scrollTop = p.scrollHeight;
+}
+
+/* ---- promoting run output onto the map ---- */
+
+// Ask the server what it sees. Nothing is written — this is the decision view.
+async function offerPromote(toolId, runId){
+  const box = document.getElementById(`promote-${toolId}`);
+  if(!box) return;
+  box.innerHTML = `<div class="sub">reading output…</div>`;
+  let d;
+  try{
+    d = await (await fetch(`/projects/${proj.id}/map/classify`,{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({run:runId})})).json();
+  }catch(e){ box.innerHTML = ""; return; }
+  if(!d.total){ box.innerHTML = `<div class="sub">nothing recognisable to promote</div>`; return; }
+
+  promoteRows.set(toolId, {rows:d.rows, run:runId});
+  const news = d.rows.filter(r=>!r.known);
+  const oos  = news.filter(r=>!r.in_scope).length;
+
+  // Uniform, in-scope, new rows are pre-selected. Reviewing 500 lines was never
+  // going to happen; reviewing the handful that are new and unexpected will.
+  box.innerHTML = `
+    <div class="lbl" style="margin-top:10px"><span>promote to map</span>
+      <span class="sub">${d.total} found · ${news.length} new
+        ${oos?`· <span class="exitN">${oos} out of scope</span>`:""}</span></div>
+    ${news.length ? `
+      <div class="promoterows">${news.map((r,i)=>`
+        <label class="${r.in_scope?"":"oos"}">
+          <input type="checkbox" data-i="${i}" ${r.in_scope?"checked":""}>
+          <code>${esc(r.line)}</code>
+          <span class="sub">${esc(r.kind)}${r.in_scope?"":" · outside scope"}</span>
+        </label>`).join("")}</div>
+      <div class="fields" style="margin-top:8px">
+        <button onclick="commitPromote('${toolId}')">Add selected</button>
+        ${sendToPicker(toolId, d.total)}
+        <span class="sub" id="promsg-${toolId}"></span>
+      </div>`
+    : `<div class="sub">all ${d.total} already on the map
+         ${sendToPicker(toolId, d.total)}</div>`}`;
+  promoteNew.set(toolId, news);
+}
+
+// Pasted input lists, kept per tool so switching views doesn't lose them.
+const inbox = new Map();
+
+// The box only appears when the command actually references {{input}} —
+// otherwise it is a text area that does nothing, which invites confusion.
+function syncInputBox(id){
+  const cmd = (document.getElementById("cmd-"+id)||{}).value || "";
+  const wrap = document.getElementById("inwrap-"+id);
+  if(wrap) wrap.hidden = !/\{\{input\}\}/.test(cmd);
+}
+function countInput(id){
+  const box = document.getElementById("in-"+id);
+  if(!box) return;
+  inbox.set(id, box.value);
+  const n = box.value.split("\n").filter(l=>l.trim()).length;
+  const el = document.getElementById("incount-"+id);
+  if(el) el.textContent = n ? `${n} line${n===1?"":"s"}` : "";
+}
+
+// Hand this run's output to another tool's input box. The whole point of the
+// chain: bbot's subdomains become httpx's list, and you see and edit what
+// moves between steps rather than it happening invisibly.
+// Every other ready tool in this engagement is a possible next step.
+function sendToPicker(fromId, count){
+  const targets = [...tools.values()].filter(t=>t.id!==fromId && t.status==="ready");
+  if(!targets.length) return "";
+  return `<select onchange="if(this.value){sendTo('${fromId}',this.value);this.value='';}"
+            style="max-width:210px">
+      <option value="">send ${count} lines to →</option>
+      ${targets.map(t=>`<option value="${t.id}">${esc(t.id)}</option>`).join("")}
+    </select>`;
+}
+
+function sendTo(fromId, toId){
+  const rows = (promoteRows.get(fromId)||{}).rows || [];
+  const lines = rows.length
+    ? rows.map(r=>r.line)
+    : (runout.get(fromId)||"").split("\n").filter(l=>l.trim());
+  inbox.set(toId, lines.join("\n"));
+  const t = tools.get(toId);
+  if(t && !/\{\{input\}\}/.test(t.last_command||"")){
+    // Give them a command that will actually consume it.
+    t.last_command = `${toId} -l {{input}}`;
+  }
+  open.add(toId);
+  render();
+  const box = document.getElementById("in-"+toId);
+  if(box){ box.scrollIntoView({block:"center"}); countInput(toId); }
+}
+
+const promoteRows = new Map();
+const promoteNew  = new Map();
+
+async function commitPromote(toolId){
+  const box = document.getElementById(`promote-${toolId}`);
+  const msg = document.getElementById(`promsg-${toolId}`);
+  const news = promoteNew.get(toolId) || [];
+  const picked = [...box.querySelectorAll("input[type=checkbox]")]
+    .filter(c=>c.checked).map(c=>news[+c.dataset.i]).filter(Boolean);
+  if(!picked.length){ msg.textContent = "nothing selected"; return; }
+  msg.textContent = "adding…";
+  const d = await (await fetch(`/projects/${proj.id}/map`,{method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({run: promoteRows.get(toolId).run, rows: picked})})).json();
+  msg.textContent = `added ${d.added} to the map`;
+  box.querySelectorAll(".promoterows").forEach(e=>e.remove());
+  loadMap();
+}
+
+/* ---- the map ---- */
+const KIND_ORDER = ["domain","host","port","webapp","finding"];
+const KIND_LABEL = {domain:"Domains", host:"Hosts", port:"Ports",
+                    webapp:"Web apps", finding:"Findings"};
+
+async function loadMap(){
+  try{
+    mapData = await (await fetch(`/projects/${proj.id}/map`)).json();
+  }catch(e){ mapData = {nodes:{}, edges:{}}; }
+  mapCount = Object.values(mapData.nodes||{}).filter(n=>!n.dismissed).length;
+  renderMap(); renderNav();
+}
+
+// Grouped by kind rather than drawn as a tree. The graph is the truth, but a
+// flat list per kind stays readable at 500 domains where a nested tree would
+// not — and every node shows what it connects to, so the structure is still
+// visible without paying for it in rendering.
+function renderMap(){
+  const el = document.getElementById("v-map");
+  const nodes = Object.values(mapData.nodes||{});
+  const shown = nodes.filter(n=>showDismissed || !n.dismissed);
+  const edges = Object.values(mapData.edges||{});
+  const dismissedCount = nodes.length - nodes.filter(n=>!n.dismissed).length;
+
+  if(!nodes.length){
+    el.innerHTML = `<h2>Map</h2><div class="empty">
+      Nothing on the map yet. Run a tool and promote its output.</div>`;
+    return;
+  }
+
+  // What each node points at, so a row can show its connections.
+  const outs = new Map();
+  edges.forEach(e=>{
+    if(!outs.has(e.frm)) outs.set(e.frm, []);
+    outs.get(e.frm).push(e);
+  });
+
+  const groups = KIND_ORDER.map(kind=>{
+    const mine = shown.filter(n=>n.kind===kind);
+    if(!mine.length) return "";
+    return `<div class="secthead">${KIND_LABEL[kind]}
+        <span class="sub">${mine.length}</span></div>
+      <table class="hist">${mine.map(n=>{
+        const links = (outs.get(n.id)||[]).length;
+        const conflict = Object.values(n.attrs||{}).some(v=>
+          new Set(v.map(x=>x.value)).size > 1);
+        const tools = [...new Set((n.sources||[]).map(s=>s.tool))].join(", ");
+        return `<tr class="${n.dismissed?'dim':''}" onclick="showNode('${esc(n.id)}')">
+          <td><code>${esc(n.value)}</code>${n.dismissed?' <span class="sub">dismissed</span>':''}</td>
+          <td class="sub">${tools||"manual"}</td>
+          <td class="sub">${links?links+" links":""}</td>
+          <td class="sub">${conflict?'<span class="exitN">conflict</span>':''}</td>
+        </tr>`;}).join("")}</table>`;
+  }).join("");
+
+  el.innerHTML = `<h2 style="display:flex;justify-content:space-between;align-items:baseline">
+      <span>Map</span>
+      <span class="sub">${shown.length} nodes · ${edges.length} links
+        ${dismissedCount ? `· <span style="cursor:pointer;color:var(--accent)"
+          onclick="showDismissed=!showDismissed;renderMap()">
+          ${showDismissed?"hide":"show"} ${dismissedCount} dismissed</span>` : ""}</span>
+    </h2>
+    <div id="nodedetail"></div>
+    ${groups}`;
+}
+
+function showNode(id){
+  const n = (mapData.nodes||{})[id];
+  if(!n) return;
+  const edges = Object.values(mapData.edges||{});
+  const outward = edges.filter(e=>e.frm===id);
+  const inward  = edges.filter(e=>e.to===id);
+  const attrRows = Object.entries(n.attrs||{}).map(([k,vals])=>{
+    const conflict = new Set(vals.map(v=>v.value)).size > 1;
+    return `<div><b>${esc(k)}</b> ${vals.map(v=>
+      `<code>${esc(v.value)}</code> <span class="sub">${esc(v.source)}</span>`).join(" · ")}
+      ${conflict?'<span class="exitN sub"> sources disagree</span>':''}</div>`;
+  }).join("") || `<div class="sub">no attributes</div>`;
+
+  document.getElementById("nodedetail").innerHTML = `
+    <div class="card" style="padding:14px;margin-bottom:12px">
+      <div class="lbl"><span>${esc(n.kind)}</span>
+        <span class="sub" style="cursor:pointer;color:var(--accent)"
+              onclick="document.getElementById('nodedetail').innerHTML=''">close</span></div>
+      <div style="font-size:15px;margin-bottom:8px"><code>${esc(n.value)}</code></div>
+      ${attrRows}
+      <div class="sub" style="margin-top:8px">
+        found by ${(n.sources||[]).map(s=>esc(s.tool)).join(", ")||"you"}
+        ${Object.keys(n.checks||{}).length
+          ? ` · checked: ${Object.keys(n.checks).join(", ")}` : ""}</div>
+      ${outward.length? `<div class="sub" style="margin-top:6px">→ ${outward.map(e=>
+          `${esc(e.rel)} <code>${esc(e.to)}</code>`).join(", ")}</div>`:""}
+      ${inward.length? `<div class="sub">← ${inward.map(e=>
+          `<code>${esc(e.frm)}</code> ${esc(e.rel)}</div>`).join(", ")}`:""}
+      <div class="addrow" style="margin-top:10px">
+        <input id="nnote" placeholder="note" value="${esc(n.note||"")}" style="flex:1">
+        <button onclick="saveNode('${esc(id)}')">Save</button>
+        ${n.dismissed
+          ? `<button class="ghost" onclick="restoreNode('${esc(id)}')">Restore</button>`
+          : `<button class="ghost" onclick="dismissNode('${esc(id)}')">Dismiss</button>`}
+      </div>
+    </div>`;
+}
+
+async function saveNode(id){
+  const note = document.getElementById("nnote").value;
+  await fetch(`/projects/${proj.id}/map/${encodeURIComponent(id)}`,{method:"PATCH",
+    headers:{"Content-Type":"application/json"}, body:JSON.stringify({note})});
+  loadMap();
+}
+// Dismiss rather than delete: the next run that finds it again would otherwise
+// resurrect it silently, and you would dismiss the same false positive forever.
+async function dismissNode(id){
+  await fetch(`/projects/${proj.id}/map/${encodeURIComponent(id)}`,{method:"DELETE"});
+  loadMap();
+}
+async function restoreNode(id){
+  await fetch(`/projects/${proj.id}/map/${encodeURIComponent(id)}`,{method:"PATCH",
+    headers:{"Content-Type":"application/json"}, body:JSON.stringify({restore:true})});
+  loadMap();
 }
 
 /* ---- projects ---- */

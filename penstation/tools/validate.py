@@ -226,6 +226,26 @@ def validate_command(command: str) -> Result:
     return Result(True)
 
 
+MAX_INPUT_LINES = 100_000
+
+
+def validate_input(text: str) -> Result:
+    """Gate a pasted input list before it is written into the container.
+
+    It becomes a file, not part of the command, so shell metacharacters are
+    harmless here — but a NUL byte truncates the file for any C program reading
+    it, which would silently shorten your target list.
+    """
+    if "\x00" in (text or ""):
+        return Result(False, "the list contains a NUL byte")
+    lines = [l for l in (text or "").splitlines() if l.strip()]
+    if not lines:
+        return Result(False, "the list is empty")
+    if len(lines) > MAX_INPUT_LINES:
+        return Result(False, f"too many lines ({len(lines)} > {MAX_INPUT_LINES})")
+    return Result(True)
+
+
 # The extracted hint is validated the same way (its {{target}} placeholder is
 # harmless to these checks).
 validate_run = validate_command

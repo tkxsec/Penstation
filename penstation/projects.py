@@ -1,7 +1,7 @@
 """Engagements, and which tools each one uses.
 
 A tool's Docker image is expensive to build and identical whichever client you
-point it at, so images live in one library (addtool/store.py) and a project only
+point it at, so images live in one library (tools/store.py) and a project only
 records *which* of them it uses, and in which section. The same nuclei image can
 therefore serve every engagement without rebuilding, while each engagement shows
 only the tooling that belongs to it.
@@ -17,24 +17,15 @@ import re
 import time
 from dataclasses import asdict, dataclass, field
 
+from penstation import engagements
 from penstation.paths import DATA
 
 PROJECTS_DIR = DATA / "projects"
 
-# Engagement types -> the sections they run through, in order.
-TYPES: dict[str, list[tuple[str, str]]] = {
-    "external": [
-        ("reconnaissance",    "Reconnaissance"),
-        ("active-scanning",   "Active Scanning"),
-        ("web-analysis",      "Web Analysis"),
-        ("password-spraying", "Password Spraying"),
-        ("exploitation",      "Exploitation"),
-    ],
-}
-
-
-def sections_for(kind: str) -> list[tuple[str, str]]:
-    return TYPES.get(kind) or TYPES["external"]
+# Methodology lives in penstation/engagements — a project only records which
+# type it is, so adding an engagement type never touches this file.
+TYPES = engagements.TYPES
+sections_for = engagements.sections_for
 
 
 def slug(text: str) -> str:
@@ -47,7 +38,7 @@ class Project:
     id: str
     client: str = ""
     scope: str = ""
-    kind: str = "external"            # engagement type; drives the section list
+    kind: str = engagements.DEFAULT   # engagement type; drives the section list
     notes: str = ""
     # section key -> tool ids, in the order you added them. Membership lives
     # here rather than on the tool so one image can sit in different sections
@@ -87,6 +78,7 @@ class Project:
         d = asdict(self)
         d["label"] = self.label
         d["section_list"] = [{"key": k, "label": l} for k, l in sections_for(self.kind)]
+        d["kind_label"] = engagements.label_for(self.kind)
         return d
 
     def save(self) -> "Project":
@@ -111,13 +103,13 @@ def load_all() -> list[Project]:
     return sorted(out, key=lambda p: p.created_at)
 
 
-def create(client: str, scope: str = "", kind: str = "external") -> Project:
+def create(client: str, scope: str = "", kind: str = engagements.DEFAULT) -> Project:
     base = slug(client)
     pid, n = base, 2
     while (PROJECTS_DIR / f"{pid}.json").exists():
         pid, n = f"{base}-{n}", n + 1
     return Project(id=pid, client=client.strip(), scope=scope.strip(),
-                   kind=kind if kind in TYPES else "external").save()
+                   kind=kind if kind in TYPES else engagements.DEFAULT).save()
 
 
 def delete(pid: str) -> bool:
@@ -149,9 +141,9 @@ def ensure_default() -> Project:
     if existing:
         return existing[0]
 
-    from penstation.addtool import store           # local: avoids a cycle
+    from penstation.tools import store           # local: avoids a cycle
     proj = create("Unassigned")
     for rec in store.load_all():
-        section = getattr(rec, "section", "") or "reconnaissance"
+        section = getattr(rec, "section", "") or sections_for(proj.kind)[0][0]
         proj.assign(section, rec.id)
     return proj.save()

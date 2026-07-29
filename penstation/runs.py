@@ -12,6 +12,7 @@ never reads the output.
 from __future__ import annotations
 
 import json
+import shutil
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -34,6 +35,7 @@ class Run:
     tool: str
     section: str = ""
     command: str = ""
+    input_lines: int = 0          # how many lines you fed it, for the history
     exit_code: int | None = None
     error: str = ""
     files: list = field(default_factory=list)
@@ -47,6 +49,26 @@ class Run:
     @property
     def log_path(self) -> Path:
         return _dir(self.project) / f"{self.id}.log"
+
+    @property
+    def files_dir(self) -> Path:
+        """Where files this run wrote to {{outdir}} are kept.
+
+        Beside the log rather than in a temp dir: a screenshot or a scan export
+        is evidence, and evidence that is deleted when the process exits is not
+        evidence at all.
+        """
+        return _dir(self.project) / self.id
+
+    def file_path(self, name: str) -> Path | None:
+        """Resolve a stored file, refusing anything outside the run's dir."""
+        base = self.files_dir.resolve()
+        try:
+            target = (base / name).resolve()
+            target.relative_to(base)     # rejects ../ traversal
+        except (OSError, ValueError):
+            return None
+        return target if target.is_file() else None
 
     def append(self, text: str) -> None:
         with self.log_path.open("a") as fh:
@@ -103,9 +125,9 @@ def for_tool(project: str, tool: str, limit: int | None = None) -> list[Run]:
 
 
 def forget_project(project: str) -> None:
-    d = RUNS_DIR / project
-    if not d.exists():
-        return
-    for f in d.iterdir():
-        f.unlink(missing_ok=True)
-    d.rmdir()
+    """Drop every run and every retained file for an engagement.
+
+    A recursive delete, because runs now own directories of evidence — the
+    earlier per-file unlink() raised as soon as a run had files.
+    """
+    shutil.rmtree(RUNS_DIR / project, ignore_errors=True)

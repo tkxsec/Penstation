@@ -18,26 +18,28 @@
 from __future__ import annotations
 
 import asyncio
+import urllib.parse
 import json
 import os
 import sys
 from pathlib import Path
 
 # app shell
-from penstation import projects, runs, settings
+from penstation import map as gmap
+from penstation import projects, runs, scope, settings
 from penstation.events import bus
 
 # the add-a-tool feature
-from penstation.addtool import dockerops as D
-from penstation.addtool import gather as gather_mod
-from penstation.addtool import handoff
-from penstation.addtool import runner, store
-from penstation.addtool.gather import GatherError, parse_url
-from penstation.addtool.jobs import JobQueue
-from penstation.addtool.pipeline import Pipeline
-from penstation.addtool.runner import RunError
-from penstation.addtool.validate import (validate_command, validate_dockerfile,
-                                          validate_install)
+from penstation.tools import dockerops as D
+from penstation.tools import gather as gather_mod
+from penstation.tools import handoff
+from penstation.tools import runner, store
+from penstation.tools.gather import GatherError, parse_url
+from penstation.tools.jobs import JobQueue
+from penstation.tools.pipeline import Pipeline
+from penstation.tools.runner import RunError
+from penstation.tools.validate import (validate_command, validate_dockerfile,
+                                          validate_input, validate_install)
 
 WEB = Path(__file__).parent / "web"
 
@@ -73,6 +75,25 @@ async def _read(reader):
 def _resp(status: str, body: bytes, ctype="application/json") -> bytes:
     return (f"HTTP/1.1 {status}\r\nContent-Type: {ctype}\r\n"
             f"Content-Length: {len(body)}\r\nConnection: close\r\n\r\n").encode() + body
+
+
+_CTYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+           ".gif": "image/gif", ".svg": "image/svg+xml", ".json": "application/json",
+           ".xml": "application/xml", ".html": "text/html", ".csv": "text/csv"}
+
+
+# Which relation links a parent to a newly promoted child.
+_REL = {"domain": "contains", "host": "resolves_to",
+        "port": "has_port", "webapp": "serves", "finding": "affects"}
+
+
+def _url_unquote(s: str) -> str:
+    return urllib.parse.unquote(s)
+
+
+def _ctype(name: str) -> str:
+    ext = name[name.rfind("."):].lower() if "." in name else ""
+    return _CTYPES.get(ext, "text/plain; charset=utf-8")
 
 
 def _ok(data) -> bytes:
@@ -207,7 +228,8 @@ async def _add_tool(payload: dict) -> dict:
     return rec.to_dict()
 
 
-async def _do_run(rec, command: str, project: str, section: str) -> None:
+async def _do_run(rec, command: str, project: str, section: str,
+                  input_text: str = "") -> None:
     """Run in the background, streaming output to the bus and to disk.
 
     Output is written under the engagement as it arrives rather than at the end,
@@ -215,6 +237,9 @@ async def _do_run(rec, command: str, project: str, section: str) -> None:
     """
     import time
     run = runs.start(project, rec.id, section, command)
+    if input_text:
+        run.input_lines = len([l for l in input_text.splitlines() if l.strip()])
+        run.save()
     bus.publish("run_start", {"id": rec.id, "command": command, "run": run.id})
 
     def on_line(line: str) -> None:
@@ -222,7 +247,9 @@ async def _do_run(rec, command: str, project: str, section: str) -> None:
         bus.publish("run_log", {"id": rec.id, "line": line})
 
     try:
-        result = await runner.run_command(rec, command, on_line)
+        result = await runner.run_command(rec, command, on_line,
+                                          outdir_keep=run.files_dir,
+                                          input_text=input_text)
         run.exit_code, run.files = result["code"], result["files"]
         bus.publish("run_done", {"id": rec.id, "code": result["code"],
                                  "command": result["command"],
@@ -307,6 +334,10 @@ def make_handler():
                     writer.write(_ok({"error": "a run is already in progress"}))
                 elif not check:
                     writer.write(_ok({"error": check.reason}))
+                elif ("{{input}}" in command
+                      and not validate_input(_json_body(body).get("input") or "")):
+                    writer.write(_ok({"error": validate_input(
+                        _json_body(body).get("input") or "").reason}))
                 else:
                     # Remember the command so the box is pre-filled next time.
                     rec.last_command = command
@@ -315,7 +346,8 @@ def make_handler():
                     proj = (projects.load((p.get("project") or "").strip())
                             or projects.ensure_default())
                     asyncio.create_task(_do_run(rec, command, proj.id,
-                                                (p.get("section") or "").strip()))
+                                                (p.get("section") or "").strip(),
+                                                p.get("input") or ""))
                     writer.write(_ok({"ok": True}))
 
             elif method == "POST" and len(parts) == 3 and parts[0] == "tools" and parts[2] == "stop":
@@ -371,6 +403,107 @@ def make_handler():
                 # Every recorded run of one tool in this engagement.
                 writer.write(_ok({"runs": [r.to_dict()
                                            for r in runs.for_tool(parts[1], parts[3])]}))
+
+            elif (method == "GET" and len(parts) == 3 and parts[0] == "projects"
+                  and parts[2] == "map"):
+                m = gmap.load(parts[1])
+                writer.write(_ok(m.to_dict()))
+
+            elif (method == "POST" and len(parts) == 4 and parts[0] == "projects"
+                  and parts[2] == "map" and parts[3] == "classify"):
+                # What does this output look like? Nothing is written here —
+                # this is the "38 new, 474 known" view you decide from.
+                p = _json_body(body)
+                text = p.get("text") or ""
+                run = runs.load(parts[1], (p.get("run") or "").strip() or "-")
+                if not text and run:
+                    text = run.output()
+                found = gmap.classify_all(text)
+                m = gmap.load(parts[1])
+                proj = projects.load(parts[1])
+                seen, rows = set(), []
+                for r in found["rows"]:
+                    nid = gmap.node_id(r["kind"], r["value"],
+                                       **({"port": r["port"]} if "port" in r else {}))
+                    if nid in seen:
+                        continue          # the same value twice in one output
+                    seen.add(nid)
+                    rows.append({**r, "id": nid,
+                                 "known": nid in m.nodes,
+                                 "in_scope": scope.matches(proj.scope, r["value"])
+                                             if proj else True})
+                writer.write(_ok({"rows": rows, "kinds": found["kinds"],
+                                  "uniform": found["uniform"],
+                                  "total": len(rows),
+                                  "new": sum(1 for r in rows if not r["known"])}))
+
+            elif (method == "POST" and len(parts) == 3 and parts[0] == "projects"
+                  and parts[2] == "map"):
+                # Commit the rows you confirmed.
+                p = _json_body(body)
+                rows = p.get("rows") or []
+                run_id = (p.get("run") or "").strip()
+                run = runs.load(parts[1], run_id) if run_id else None
+                tool = run.tool if run else "manual"
+                parent = (p.get("parent") or "").strip()
+
+                def commit(m):
+                    added = 0
+                    for r in rows:
+                        kind, value = r.get("kind"), r.get("value") or r.get("line")
+                        if kind not in gmap.KINDS or not value:
+                            continue
+                        extra = {"port": int(r["port"])} if r.get("port") else {}
+                        node = m.add_node(kind, value, run=run_id, tool=tool, **extra)
+                        if parent and parent in m.nodes:
+                            m.link(parent, _REL.get(kind, "contains"), node.id,
+                                   run=run_id, tool=tool)
+                        added += 1
+                    if parent and run and run.section:
+                        m.mark_checked(parent, tool, run_id)
+                    return added
+
+                added = await gmap.mutate(parts[1], commit)
+                out(_paint(f"[map] {parts[1]}: +{added} node(s) from {tool}", "green"))
+                writer.write(_ok({"added": added}))
+
+            elif (method == "POST" and len(parts) == 4 and parts[0] == "projects"
+                  and parts[2] == "map" and parts[3] == "undo"):
+                run_id = (_json_body(body).get("run") or "").strip()
+                gone = await gmap.mutate(parts[1], lambda m: m.undo_run(run_id))
+                writer.write(_ok({"removed": gone}))
+
+            elif (method in ("PATCH", "DELETE") and len(parts) == 4
+                  and parts[0] == "projects" and parts[2] == "map"):
+                nid = _url_unquote(parts[3])
+                if method == "DELETE":
+                    hard = b"hard" in body
+                    fn = (lambda m: m.remove(nid)) if hard else (lambda m: m.dismiss(nid))
+                    writer.write(_ok({"ok": await gmap.mutate(parts[1], fn)}))
+                else:
+                    p = _json_body(body)
+                    def edit(m):
+                        n = m.nodes.get(nid)
+                        if not n:
+                            return False
+                        if "note" in p:
+                            n.note = (p.get("note") or "").strip()
+                        if "tags" in p:
+                            n.tags = list(p.get("tags") or [])
+                        if p.get("restore"):
+                            n.dismissed = False
+                        return True
+                    writer.write(_ok({"ok": await gmap.mutate(parts[1], edit)}))
+
+            elif (method == "GET" and len(parts) >= 6 and parts[0] == "projects"
+                  and parts[2] == "runs" and parts[4] == "files"):
+                # Serve a file the run produced. Screenshots are the point.
+                r = runs.load(parts[1], parts[3])
+                fp = r.file_path("/".join(parts[5:])) if r else None
+                if fp is None:
+                    writer.write(_resp("404 Not Found", b"not found", "text/plain"))
+                else:
+                    writer.write(_resp("200 OK", fp.read_bytes(), _ctype(fp.name)))
 
             elif (method == "GET" and len(parts) == 5 and parts[0] == "projects"
                   and parts[2] == "runs"):
