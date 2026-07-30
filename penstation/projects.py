@@ -62,7 +62,7 @@ class Project:
         from penstation import scope as scope_mod
         out = []
         for rule in scope_mod.parse(self.scope):
-            if "/" in rule:                       # a network, not a domain
+            if scope_mod.is_network(rule):        # a network, not a domain
                 continue
             apex = rule.removeprefix("*.")
             if apex and not apex.replace(".", "").isdigit() and apex not in out:
@@ -72,7 +72,7 @@ class Project:
     @property
     def networks(self) -> list[str]:
         from penstation import scope as scope_mod
-        return [r for r in scope_mod.parse(self.scope) if "/" in r]
+        return [r for r in scope_mod.parse(self.scope) if scope_mod.is_network(r)]
 
     @property
     def scope_all(self) -> list[str]:
@@ -128,6 +128,11 @@ class Project:
         d["targets"] = self.targets
         d["networks"] = self.networks
         d["scope_all"] = self.scope_all
+        # Rules that cannot match anything, reported with the project so the UI
+        # can say so where the scope is shown rather than silently finding less.
+        from penstation import scope as scope_mod
+        d["scope_problems"] = [{"rule": r, "why": w}
+                               for r, w in scope_mod.problems(self.scope)]
         return d
 
     def save(self) -> "Project":

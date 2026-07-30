@@ -81,7 +81,15 @@ class Pipeline:
         self._log(rec, f"  {G.quota_note()}\n")
 
         # Deterministic run template first; --help overrides it at verify.
-        rec.run_template = G.extract_run(sig) or ""
+        #
+        # Never for a baseline tool: its command is declared, not inferred, and
+        # it encodes how the methodology uses the tool. The guard at verify was
+        # not enough — inspection runs first and overwrote subfinder's
+        # `-d {{targets}} -all -o {{outdir}}/subdomains.txt` with a bare
+        # `subfinder -d {{target}}` lifted from the README, so the scan wrote no
+        # result file and had nothing to promote.
+        if not rec.baseline:
+            rec.run_template = G.extract_run(sig) or ""
 
         plan = self._plan_recipes(rec, sig)
         self._plan[rec.id] = plan
@@ -96,7 +104,7 @@ class Pipeline:
         if plan:
             self._adopt(rec, plan[0])
 
-        if not rec.run_template:
+        if not rec.run_template and not rec.baseline:
             rec.run_template = f"{sig.repo.lower()} {{{{target}}}}"
         self._log(rec, f"  run_template: {rec.run_template}\n")
         rec.save()

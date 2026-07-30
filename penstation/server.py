@@ -92,6 +92,61 @@ def _url_unquote(s: str) -> str:
     return urllib.parse.unquote(s)
 
 
+def _basename(name: str) -> str:
+    """Last component of a recorded file name, whichever separator wrote it.
+
+    Names are stored posix-style now, but runs recorded on Windows before that
+    hold "scan_dir\\subdomains.txt" — and a split on "/" alone left that whole
+    string as the "basename", so the declared result file never matched and
+    promotion fell back to sweeping every log the scan wrote.
+    """
+    return name.replace("\\", "/").rsplit("/", 1)[-1]
+
+
+def _out_of_scope_targets(proj, command: str, input_text: str) -> list[str]:
+    """Targets in this run that the map says are not ours to touch.
+
+    Reads both places a target can come from: the input file a list-taking tool
+    is handed, and the words of the command itself, which is where a hand-edited
+    single-target run puts it.
+
+    A value the map knows is judged by the map, so an address that is in scope
+    only by inheritance still passes. A value the map has never seen is judged by
+    the scope rules alone — typing an address into the box is not a way to reach
+    something the engagement never authorised.
+    """
+    m = gmap.load(proj.id)
+    verdicts = gmap.derive_scope(m, lambda v: scope.matching_rule(proj.scope, v))
+    known = {}
+    for nid, n in m.nodes.items():
+        ok = verdicts.get(nid, {}).get("in_scope", True)
+        known.setdefault(gmap.canon_domain(n.value), ok)
+        known.setdefault(gmap.canon_host(n.value), ok)
+
+    words = list((input_text or "").splitlines())
+    words += [w for w in (command or "").replace("=", " ").split()
+              if not w.startswith("-")]
+    bad = []
+    for raw in words:
+        v = (raw or "").strip().strip("'\"")
+        # Only things that name a target. Flags, file paths and the tool's own
+        # name are not targets, and {{input}} is a placeholder the runner fills.
+        if not v or v.startswith("{{") or "/" in v and not gmap.classify(v):
+            continue
+        kind = (gmap.classify(v) or ("", {}))[0]
+        if kind not in ("domain", "host", "port", "webapp"):
+            continue
+        for key in (gmap.canon_domain(v), gmap.canon_host(v)):
+            if key in known:
+                if not known[key] and v not in bad:
+                    bad.append(v)
+                break
+        else:
+            if not scope.matches(proj.scope, v) and v not in bad:
+                bad.append(v)
+    return bad
+
+
 def _ctype(name: str) -> str:
     ext = name[name.rfind("."):].lower() if "." in name else ""
     return _CTYPES.get(ext, "text/plain; charset=utf-8")
@@ -211,10 +266,11 @@ def ensure_baseline(kind: str = "") -> dict:
                 rec.manual_dockerfile = entry["dockerfile"]
                 rec.run_template = entry.get("run", "")
                 rec.baseline, rec.check = True, entry.get("check", "")
-                rec.purpose = entry.get("purpose", "")
                 rec.baseline_order = order
                 rec.consumes = list(entry.get("consumes") or [])
                 rec.result_file = entry.get("result_file", "")
+                rec.output_files = list(entry.get("output_files") or [])
+                rec.targets = list(entry.get("targets") or [])
                 rec.save()
                 queue.submit(rec)
                 queued.append(tid)
@@ -223,8 +279,9 @@ def ensure_baseline(kind: str = "") -> dict:
                 rec.baseline_order = order
                 rec.consumes = list(entry.get("consumes") or [])
                 rec.result_file = entry.get("result_file", "")
+                rec.output_files = list(entry.get("output_files") or [])
+                rec.targets = list(entry.get("targets") or [])
                 rec.check = entry.get("check", "")
-                rec.purpose = entry.get("purpose", "")
                 rec.run_template = entry.get("run", "")
                 rec.save()
                 reused.append(tid)
@@ -397,15 +454,34 @@ def make_handler():
                     writer.write(_ok({"error": validate_input(
                         _json_body(body).get("input") or "").reason}))
                 else:
-                    rec.last_command = command      # history only
-                    rec.save()
                     p = _json_body(body)
                     proj = (projects.load((p.get("project") or "").strip())
                             or projects.ensure_default())
-                    asyncio.create_task(_do_run(rec, command, proj.id,
-                                                (p.get("section") or "").strip(),
-                                                p.get("input") or ""))
-                    writer.write(_ok({"ok": True}))
+                    # The scope has shaped which targets get offered; here it
+                    # decides. A tool that sends traffic does not run against
+                    # something the map says is out of scope, and editing the
+                    # box by hand is exactly the path that got round the filter.
+                    #
+                    # Passive steps are exempt: asking a public resolver about a
+                    # third party's name sends them nothing, and that is how you
+                    # learn whose it is in the first place.
+                    refused = ([] if rec.check in ("subdomain-enum", "resolve")
+                               or p.get("force")
+                               else _out_of_scope_targets(
+                                   proj, command, p.get("input") or ""))
+                    if refused:
+                        writer.write(_ok({"error":
+                            "out of scope: " + ", ".join(refused[:5])
+                            + (f" and {len(refused)-5} more" if len(refused) > 5 else "")
+                            + " — move them in scope, or run it anyway",
+                            "out_of_scope": refused}))
+                    else:
+                        rec.last_command = command      # history only
+                        rec.save()
+                        asyncio.create_task(_do_run(rec, command, proj.id,
+                                                    (p.get("section") or "").strip(),
+                                                    p.get("input") or ""))
+                        writer.write(_ok({"ok": True}))
 
             elif (method == "POST" and len(parts) == 3
                   and parts[0] == "tools" and parts[2] == "command"):
@@ -497,8 +573,41 @@ def make_handler():
 
             elif (method == "GET" and len(parts) == 3 and parts[0] == "projects"
                   and parts[2] == "map"):
+                proj = projects.load(parts[1])
                 m = gmap.load(parts[1])
-                writer.write(_ok(m.to_dict()))
+                # The scope is part of the map by definition, so a missing root
+                # is repaired rather than reported. Deleting one — or clearing
+                # the map on a build that had no re-seed — used to leave the
+                # engagement's own targets off it with no way back short of
+                # re-saving the scope field. Only when something is actually
+                # missing: a map load is a read, and this is the repair.
+                if proj and gmap.scope_missing(m, proj.scope):
+                    await gmap.mutate(parts[1],
+                                      lambda mm: gmap.seed_from_scope(mm, proj.scope))
+                    m = gmap.load(parts[1])
+                d = m.to_dict()
+                # Scope travels with the nodes rather than being re-derived in
+                # the browser, so the map and the promote box cannot disagree
+                # about what is in scope — one rule, evaluated in one place.
+                # Scope is the engagement's rules, full stop. It used to also
+                # count "you promoted it", which made sense when promoting was a
+                # decision you made row by row; nothing is confirmed now, so
+                # that rule would mark everything a scan found as in scope and
+                # collapse the map's in/out split into one bucket.
+                derived = gmap.derive_scope(
+                    m, (lambda v: scope.matching_rule(proj.scope, v)) if proj
+                       else (lambda v: "*"))
+                for nid, n in d["nodes"].items():
+                    tags = n.get("tags") or []
+                    verdict = derived.get(nid) or {"in_scope": True, "why": ""}
+                    n["in_scope"] = verdict["in_scope"]
+                    # Why, not just whether — the map states its reasoning so a
+                    # host you are about to scan can be justified line by line.
+                    n["scope_why"] = verdict["why"]
+                    n["scope_forced"] = (gmap.SCOPE_IN in tags
+                                         or gmap.SCOPE_OUT in tags)
+                    n["third_party"] = gmap.is_third_party(tags)
+                writer.write(_ok(d))
 
             elif (method == "POST" and len(parts) == 4 and parts[0] == "projects"
                   and parts[2] == "map" and parts[3] == "classify"):
@@ -506,6 +615,7 @@ def make_handler():
                 # this is the "38 new, 474 known" view you decide from.
                 p = _json_body(body)
                 text = p.get("text") or ""
+                missing = ""     # a declared result file the run never wrote
                 run = runs.load(parts[1], (p.get("run") or "").strip() or "-")
                 if not text and run:
                     rec = store.load(run.tool)
@@ -520,14 +630,26 @@ def make_handler():
                             name = f.get("name", "")
                             # bbot nests its output under a generated scan name, so
                             # match the basename rather than the whole path.
-                            if name.rsplit("/", 1)[-1].lower() == want.lower():
+                            if _basename(name).lower() == want.lower():
                                 picked = run.file_path(name)
                                 break
-                    if picked:
+                    if want:
+                        # Declared means declared, including when the file is
+                        # absent: falling back to the sweep on a miss is how a
+                        # scan that found 9 subdomains offered 50 rows, 49 of them
+                        # out of scope, read out of its own debug log. Nothing to
+                        # read is a truthful "nothing to promote".
+                        #
+                        # Say which file, though. "Nothing recognisable to
+                        # promote" under a pane listing 11 subdomains reads as a
+                        # parser bug; the actual fault was a command that never
+                        # wrote the file, and naming it points straight at that.
                         try:
-                            text = picked.read_text(errors="replace")
+                            text = picked.read_text(errors="replace") if picked else ""
                         except OSError:
                             text = ""
+                        if not picked:
+                            missing = want
                     else:
                         # No declared result file (or it wasn't produced): stdout
                         # plus anything readable the run wrote. bbot's subdomains
@@ -541,7 +663,7 @@ def make_handler():
                             # evidence; reading it back made every value a fresh
                             # "discovery", so anything wrong on the map re-promoted
                             # itself on the next run and could never be deleted.
-                            if name.rsplit("/", 1)[-1] == runner.INPUT_NAME:
+                            if _basename(name) == runner.INPUT_NAME:
                                 continue
                             fp = run.file_path(name)
                             if fp and fp.suffix.lower() in (
@@ -554,21 +676,85 @@ def make_handler():
                 found = gmap.classify_all(text)
                 m = gmap.load(parts[1])
                 proj = projects.load(parts[1])
-                seen, rows = set(), []
+                # Wildcards known before this output plus any it declares itself,
+                # so a single bbot run folds its own findings without needing a
+                # second pass. The tool that detects the wildcard is rarely the
+                # one that trips over it: bbot reports the fact, and subfinder
+                # reports every name underneath.
+                wilds = {gmap.canon_domain(n.value) for n in m.nodes.values()
+                         if gmap.WILDCARD in n.tags}
+                wilds |= {gmap.canon_domain(r["value"]) for r in found["rows"]
+                          if r.get("wildcard")}
+
+                seen, rows, folded = set(), [], {}
                 for r in found["rows"]:
                     nid = gmap.node_id(r["kind"], r["value"],
                                        **({"port": r["port"]} if "port" in r else {}))
                     if nid in seen:
                         continue          # the same value twice in one output
                     seen.add(nid)
-                    rows.append({**r, "id": nid,
-                                 "known": nid in m.nodes,
-                                 "in_scope": scope.matches(proj.scope, r["value"])
-                                             if proj else True})
+                    # Under a wildcard, but still recorded. A wildcard means DNS
+                    # cannot confirm a name, not that the name was invented —
+                    # and nothing in the baseline invents names: a passive source
+                    # reporting one means a certificate or a public record
+                    # carries it, and two names on one address are routinely two
+                    # applications, because web servers route on Host. What the
+                    # mark is for is the scanning layer, where they really are
+                    # one host.
+                    under = ""
+                    if not r.get("wildcard") and r["kind"] == "domain":
+                        under = gmap.wildcard_over(wilds, r["value"])
+                        if under:
+                            folded[under] = folded.get(under, 0) + 1
+                    # Your override, else the rules. Inheritance is applied below
+                    # once every row is known, because a host's verdict depends
+                    # on the names in the same output that resolve to it.
+                    node = m.nodes.get(nid)
+                    marks = [t for t in (r.get("tags") or [])
+                             if t in gmap.KEEP_TAGS]
+                    third = gmap.is_third_party(
+                        (node.tags if node else []) + marks)
+                    in_scope = gmap.in_scope(
+                        node.tags if node else [],
+                        bool(scope.matches(proj.scope, r["value"])
+                             if proj else True))
+                    rows.append({**r, "id": nid, "known": nid in m.nodes,
+                                 "under_wildcard": under, "in_scope": in_scope,
+                                 "third_party": third,
+                                 "forced": bool(node and (
+                                     gmap.SCOPE_IN in node.tags
+                                     or gmap.SCOPE_OUT in node.tags))})
+
+                # Scope carries along resolution here too, or dig's output would
+                # offer every address it found as out of scope — no domain rule
+                # can match an IP — while the map, which does inherit, shows the
+                # same addresses in scope a moment later.
+                by_id = {r["id"]: r for r in rows}
+                # A seed is a row the rules matched, or one already on the map in
+                # scope — not a row that inherited it a moment ago, for the same
+                # reason as derive_scope: one hop, never a closure.
+                seeds = {r["id"] for r in rows if r["in_scope"]} | {
+                    nid for nid, n in m.nodes.items() if gmap.SCOPE_IN in n.tags}
+                for e in (found.get("edges") or []):
+                    if e.get("rel") != "resolves_to":
+                        continue
+                    for src, dst in ((e.get("frm"), e.get("to")),
+                                     (e.get("to"), e.get("frm"))):
+                        b = by_id.get(dst)
+                        if src in seeds and b and not b["in_scope"] \
+                                and not b["forced"] and not b["third_party"]:
+                            b["in_scope"] = True
+                for _ in range(2):
+                    for e in (found.get("edges") or []):
+                        a, b = by_id.get(e.get("frm")), by_id.get(e.get("to"))
+                        if e.get("rel") in ("has_port", "serves") and a and b \
+                                and a["in_scope"] and not b["forced"]:
+                            b["in_scope"] = True
                 writer.write(_ok({"rows": rows, "kinds": found["kinds"],
                                   "uniform": found["uniform"],
                                   "edges": found.get("edges") or [],
-                                  "total": len(rows),
+                                  "total": len(rows), "folded": folded,
+                                  "missing_result": missing,
                                   "new": sum(1 for r in rows if not r["known"])}))
 
             elif (method == "POST" and len(parts) == 3 and parts[0] == "projects"
@@ -583,12 +769,16 @@ def make_handler():
                 run_id = (p.get("run") or "").strip()
                 run = runs.load(parts[1], run_id) if run_id else None
                 tool = run.tool if run else "manual"
+                tool_rec = store.load(run.tool) if run else None
+                check_kind = (getattr(tool_rec, "check", "") or tool)
                 parent = (p.get("parent") or "").strip()
+                stale = 0          # resolutions this answer superseded
 
                 def commit(m):
                     # Counted by how much the map grew, not by how many calls were
                     # made: the same resolution appears on several events, and
                     # reporting "36 links" when 34 landed is just wrong.
+                    nonlocal stale
                     added, before = 0, len(m.edges)
                     for r in rows:
                         kind, value = r.get("kind"), r.get("value") or r.get("line")
@@ -598,6 +788,35 @@ def make_handler():
                         if kind == "finding" and r.get("on"):
                             extra["on"] = r["on"]
                         node = m.add_node(kind, value, run=run_id, tool=tool, **extra)
+                        # Promoting is the scope decision. A row you reviewed and
+                        # put on the map is in scope from then on, whatever the
+                        # scope text says — that is what "Add all" means when it
+                        # takes rows the rules flagged. The tag is what makes it
+                        # stick: without it the same value came back flagged
+                        # out of scope on every later classify.
+                        if gmap.ACCEPTED not in node.tags:
+                            node.tags.append(gmap.ACCEPTED)
+                        # Whose infrastructure the scan said this is. Carried
+                        # onto the node so the map can show it and scope can
+                        # refuse to inherit into it.
+                        for mark in (r.get("tags") or []):
+                            if mark in gmap.KEEP_TAGS and mark not in node.tags:
+                                node.tags.append(mark)
+                        # Promoting the marker is what makes it stick: from here
+                        # on, every tool's names under this domain are marked.
+                        if r.get("wildcard") and gmap.WILDCARD not in node.tags:
+                            node.tags.append(gmap.WILDCARD)
+                        # And the other side of it — kept, marked, and hung off
+                        # the wildcard so the map shows the relationship rather
+                        # than a flat list that hides it.
+                        under = (r.get("under_wildcard") or "").strip()
+                        if under:
+                            if gmap.UNDER_WILDCARD not in node.tags:
+                                node.tags.append(gmap.UNDER_WILDCARD)
+                            pid = gmap.node_id("domain", under)
+                            if pid in m.nodes and pid != node.id:
+                                m.link(pid, "contains", node.id,
+                                       run=run_id, tool=tool)
                         if parent and parent in m.nodes:
                             m.link(parent, _REL.get(kind, "contains"), node.id,
                                    run=run_id, tool=tool)
@@ -606,14 +825,83 @@ def make_handler():
                         frm, rel, to = e.get("frm"), e.get("rel"), e.get("to")
                         if rel in gmap.RELATIONS and frm in m.nodes and to in m.nodes:
                             m.link(frm, rel, to, run=run_id, tool=tool)
+                    # A resolver's answer replaces the previous one for the names
+                    # it answered about. Edges were only ever added, so a name
+                    # that moved to a new address kept the old one too — and the
+                    # old address stayed in scope by inheritance forever, from a
+                    # resolution that had stopped being true.
+                    if check_kind == "resolve":
+                        fresh = {(e.get("frm"), e.get("to")) for e in want_edges
+                                 if e.get("rel") == "resolves_to"}
+                        answered = {f for f, _ in fresh}
+                        for key, edge in list(m.edges.items()):
+                            if (edge.rel == "resolves_to" and edge.frm in answered
+                                    and (edge.frm, edge.to) not in fresh):
+                                m.edges.pop(key, None)
+                                stale += 1
                     if parent and run and run.section:
-                        m.mark_checked(parent, tool, run_id)
+                        # Recorded as the coverage kind, not the tool id. The
+                        # node then reads "checked: http-probe", curl and httpx
+                        # count as the same coverage, and the phase checklist —
+                        # which counts nodes by their phase's checks — can see
+                        # its own work. Keyed by tool, nothing matched.
+                        m.mark_checked(parent, check_kind, run_id)
                     return added, len(m.edges) - before
 
                 added, linked = await gmap.mutate(parts[1], commit)
                 out(_paint(f"[map] {parts[1]}: +{added} node(s), "
-                           f"+{linked} edge(s) from {tool}", "green"))
-                writer.write(_ok({"added": added, "linked": linked}))
+                           f"+{linked} edge(s) from {tool}"
+                           + (f", {stale} stale resolution(s) dropped"
+                              if stale else ""), "green"))
+                writer.write(_ok({"added": added, "linked": linked,
+                                  "stale": stale}))
+
+            elif (method == "POST" and len(parts) == 4 and parts[0] == "projects"
+                  and parts[2] == "map" and parts[3] == "scope"):
+                # Your scope call on any number of nodes at once. One mutation
+                # rather than one per node: moving twelve subdomains across is
+                # a single decision, and a dozen separate writes would leave the
+                # map half-changed if one of them failed.
+                p = _json_body(body)
+                ids = [str(x) for x in (p.get("ids") or [])]
+                mode = (p.get("mode") or "auto").strip()
+
+                def set_scope(m):
+                    # One hop along the relations that mean "this thing lives on
+                    # that thing", both ways: a name and the address it resolves
+                    # to are the same target, and so are a host and its ports.
+                    # Moving one without the other is how you end up with an
+                    # in-scope name whose address is out of scope — nothing to
+                    # scan — or an out-of-scope host still handing its ports to
+                    # the web tools.
+                    #
+                    # One hop, not the transitive closure: thirteen names share
+                    # one address here, and moving a single subdomain should not
+                    # drag in the other twelve through it.
+                    # No cascade. Scope carries along resolution on its own, in
+                    # derive_scope, so moving a name already brings the address
+                    # it answers with — and doing it here as well would write
+                    # overrides onto nodes you never picked, which then stop
+                    # following the map at all.
+                    wanted = set(ids)
+                    changed = 0
+                    for nid in wanted:
+                        node = m.nodes.get(nid)
+                        if node is None:
+                            continue
+                        node.tags = [t for t in node.tags
+                                     if t not in (gmap.SCOPE_IN, gmap.SCOPE_OUT)]
+                        if mode == "in":
+                            node.tags.append(gmap.SCOPE_IN)
+                        elif mode == "out":
+                            node.tags.append(gmap.SCOPE_OUT)
+                        changed += 1
+                    return changed, len(wanted - set(ids))
+
+                changed, also = await gmap.mutate(parts[1], set_scope)
+                out(_paint(f"[map] {parts[1]}: {changed} node(s) -> scope {mode}"
+                           + (f" ({also} followed)" if also else ""), "green"))
+                writer.write(_ok({"changed": changed, "also": also}))
 
             elif (method == "POST" and len(parts) == 4 and parts[0] == "projects"
                   and parts[2] == "map" and parts[3] == "undo"):
@@ -625,9 +913,11 @@ def make_handler():
                   and parts[0] == "projects" and parts[2] == "map"):
                 nid = _url_unquote(parts[3])
                 if method == "DELETE":
-                    hard = b"hard" in body
-                    fn = (lambda m: m.remove(nid)) if hard else (lambda m: m.dismiss(nid))
-                    writer.write(_ok({"ok": await gmap.mutate(parts[1], fn)}))
+                    # One kind of delete, and it removes the node and its edges.
+                    # A scope root is the exception the map repairs on the next
+                    # load — the scope is not the map's to discard.
+                    writer.write(_ok({"ok": await gmap.mutate(
+                        parts[1], lambda m: m.remove(nid))}))
                 else:
                     p = _json_body(body)
                     def edit(m):
@@ -638,16 +928,22 @@ def make_handler():
                             n.note = (p.get("note") or "").strip()
                         if "tags" in p:
                             n.tags = list(p.get("tags") or [])
-                        if p.get("restore"):
-                            n.dismissed = False
                         return True
                     writer.write(_ok({"ok": await gmap.mutate(parts[1], edit)}))
 
             elif (method == "GET" and len(parts) >= 6 and parts[0] == "projects"
                   and parts[2] == "runs" and parts[4] == "files"):
                 # Serve a file the run produced. Screenshots are the point.
-                r = runs.load(parts[1], parts[3])
-                fp = r.file_path("/".join(parts[5:])) if r else None
+                #
+                # Unquote per segment: the browser percent-encodes each one, so
+                # a space or a backslash (older runs recorded names with the
+                # Windows separator) arrived here as literal "%20"/"%5C" and
+                # matched no file. file_path() still rejects anything that
+                # resolves outside the run's directory, so decoding first cannot
+                # open a traversal.
+                r = runs.load(parts[1], _url_unquote(parts[3]))
+                fp = r.file_path("/".join(_url_unquote(x)
+                                          for x in parts[5:])) if r else None
                 if fp is None:
                     writer.write(_resp("404 Not Found", b"not found", "text/plain"))
                 else:
@@ -677,6 +973,36 @@ def make_handler():
                     out(_paint(f"project created: {proj.id} ({proj.kind})", "green"))
                     writer.write(_ok(proj.to_dict()))
 
+            elif (method == "POST" and len(parts) == 3 and parts[0] == "projects"
+                  and parts[2] == "clear"):
+                # Everything this engagement produced: its map, every recorded
+                # run and the files those runs retained. The engagement itself
+                # stays — client, scope, notes, and which tools sit in which
+                # phase — because this is for starting the work again, not
+                # setting it up again. Installed images are shared between
+                # engagements and are never touched here; uninstalling lives
+                # under Add Tool.
+                proj = projects.load(parts[1])
+                if proj is None:
+                    writer.write(_ok({"error": "unknown project"}))
+                else:
+                    n_runs = runs.count(parts[1])
+
+                    def wipe(m):
+                        gone = len(m.nodes)
+                        m.nodes.clear()
+                        m.edges.clear()
+                        # Re-seed, or the map comes back empty and there is
+                        # nowhere for the next run to hang its output off.
+                        gmap.seed_from_scope(m, proj.scope)
+                        return gone
+
+                    n_nodes = await gmap.mutate(parts[1], wipe)
+                    runs.forget_project(parts[1])
+                    out(_paint(f"[clear] {proj.id}: {n_nodes} node(s), "
+                               f"{n_runs} run(s) removed", "green"))
+                    writer.write(_ok({"nodes": n_nodes, "runs": n_runs}))
+
             elif method in ("PATCH", "DELETE") and len(parts) == 2 and parts[0] == "projects":
                 proj = projects.load(parts[1])
                 if proj is None:
@@ -686,6 +1012,7 @@ def make_handler():
                     # uninstalls anything — it only drops the assignments.
                     projects.delete(parts[1])
                     runs.forget_project(parts[1])
+                    gmap.forget(parts[1])
                     writer.write(_ok({"ok": True}))
                 else:
                     p = _json_body(body)

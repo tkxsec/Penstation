@@ -6,7 +6,13 @@
 <title>penstation · add a tool</title>
 <style>
   :root{ --bg:#ffffff; --panel:#f6f8fa; --border:#d0d7de; --fg:#1f2328; --dim:#656d76;
-         --accent:#0969da; --green:#1a7f37; --amber:#9a6700; --red:#cf222e; }
+         --accent:#0969da; --green:#1a7f37; --amber:#9a6700; --red:#cf222e;
+         /* --line and --muted were used by twenty-one rules and defined by
+            none. An undefined var makes the whole declaration invalid, so every
+            one of those borders and greys silently did nothing — which is why
+            the kind boxes had no border however many times it was set. --line
+            is a lighter rule for nesting inside an already-bordered panel. */
+         --line:#e4e8ed; --muted:#656d76; }
   *{ box-sizing:border-box; }
   body{ margin:0; font:14px/1.5 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
         background:var(--bg); color:var(--fg); }
@@ -15,7 +21,12 @@
   h1{ margin:0; font-size:16px; letter-spacing:.5px; } h1 span{ color:var(--accent); }
   .dockstate{ font-size:12px; color:var(--dim); }
   .app{ display:grid; grid-template-columns:210px minmax(0,1fr); align-items:start; }
-  main{ min-width:0; padding:22px 20px; max-width:940px; }
+  /* No cap. A fixed one — 940px, then 1500px — always leaves a wide screen with
+     a band of nothing down the right, and the map is a two-column layout that
+     uses every pixel you give it. The views that are prose or a form keep their
+     own limit below, because a text field 2,000px wide is not an improvement. */
+  main{ min-width:0; padding:22px 20px; max-width:none; }
+  #v-settings, #v-project, #v-newproject{ max-width:900px; }
   nav{ position:sticky; top:0; padding:22px 0 22px 14px; }
   nav a{ display:flex; justify-content:space-between; align-items:center; gap:8px;
     padding:7px 12px; margin:1px 0; border-radius:6px; cursor:pointer;
@@ -72,8 +83,11 @@
   h2{ font-size:12px; text-transform:uppercase; letter-spacing:1px; color:var(--dim); margin:0 0 10px; }
   section{ margin-bottom:26px; }
   input, select, button{ font:inherit; }
-  input, select{ background:#fff; border:1px solid var(--border); color:var(--fg);
-                 border-radius:6px; padding:9px 11px; }
+  /* Text fields only. A checkbox given 9px of padding and a 6px radius keeps its
+     native glyph and pads *around* it, so in a flex row it shrank by however
+     much the label beside it needed — and no two ticks lined up. */
+  input:not([type=checkbox]), select{ background:#fff; border:1px solid var(--border);
+                 color:var(--fg); border-radius:6px; padding:9px 11px; }
   button{ background:var(--accent); color:#fff; border:0; border-radius:6px;
           padding:9px 18px; cursor:pointer; font-weight:600; }
   button.ghost{ background:#fff; color:var(--fg); border:1px solid var(--border); font-weight:400; }
@@ -97,6 +111,99 @@
     margin:18px 0 8px; font-size:11px; font-weight:600; letter-spacing:.08em;
     text-transform:uppercase; color:var(--muted); }
   .secthead:first-child{ margin-top:0; }
+  /* A phase inside the Baseline block. Subordinate to .secthead on purpose:
+     lighter, not uppercased, and indented to the cards it heads. */
+  /* Ruled off from the tools it heads, the same way a kind box is ruled off
+     from its list — the line closes the row, buttons included. */
+  .subhead{ display:flex; justify-content:flex-start; align-items:center;
+    gap:8px; margin:14px 0 6px; padding:0 0 6px; font-size:12px;
+    font-weight:600; color:var(--fg);
+    border-bottom:1px solid var(--line); }
+  .mapdetail .secthead{ padding-bottom:6px; border-bottom:1px solid var(--border); }
+  .subhead .sub{ margin-top:0; }
+  /* Buttons that belong to a heading rather than to a form. */
+  .mini{ padding:3px 9px; font-size:12px; font-weight:600; }
+  .mini .sub{ margin-left:3px; }
+  /* Start belongs beside the phase it runs; Tools is the other end of the row. */
+  .toolsbtn{ margin-left:auto; }
+  /* The checklist: the whole engagement in one line per phase, always on
+     screen, with the working area below it showing whichever you picked. */
+  .steplist{ margin:2px 0 12px; }
+  .steprow{ display:flex; align-items:baseline; gap:8px; padding:5px 6px;
+    border-radius:6px; cursor:pointer; font-size:13px; }
+  .steprow:hover{ background:var(--panel); }
+  .steprow.on{ background:var(--panel); box-shadow:inset 2px 0 0 var(--accent); }
+  .steprow .stepmark{ width:14px; text-align:center; color:var(--muted); }
+  .steprow .stepname{ font-weight:600; }
+  .steprow .sub{ margin-top:0; margin-left:auto; text-align:right; }
+  .steprow.done .stepmark{ color:var(--green); }
+  .steprow.running .stepmark{ color:var(--accent); }
+  .steprow.stale .stepmark{ color:var(--amber); }
+  .steprow.blocked .stepmark{ color:var(--red); }
+  .steprow.blocked .stepname, .steprow.empty .stepname{ color:var(--muted); }
+  .fold{ color:var(--muted); font-size:10px; margin-right:3px; }
+  .top:hover .fold{ color:var(--accent); }
+  /* In scope / out of scope inside a map group. Quieter than .mapkind — it
+     divides one list rather than starting a new one. */
+  .mapband{ display:flex; justify-content:space-between; align-items:baseline;
+    gap:8px; margin:8px 0 4px; font-size:11px; color:var(--muted); }
+  .mapband.oos{ color:var(--red); }
+  /* Kind, inside a scope panel — quieter than the panel heading above it. */
+  /* Ruled off from its list, so the heading reads as the label for what is
+     under it rather than as the first entry. */
+  .mapkindsub{ display:flex; justify-content:space-between; align-items:baseline;
+    margin:0 0 6px; padding-bottom:5px; border-bottom:1px solid var(--line);
+    font-size:11px; text-transform:uppercase; letter-spacing:.06em;
+    color:var(--muted); }
+  .mapkindsub .sub{ margin-top:0; text-transform:none; letter-spacing:0; }
+  /* The names under a wildcard, and the note about the ones that are not here. */
+  .mapkids{ margin-left:10px; padding-left:10px; border-left:1px solid var(--line); }
+  .kidstub{ margin:2px 0 4px 20px; font-size:11px; color:var(--muted); }
+  .mapband .sub{ margin-top:0; }
+  /* Each side is enclosed, with its kind boxes inside it. Three nested frames
+     is a lot, so they step down in weight: the panel is the solid one, the kind
+     boxes are lighter, and a row only shows its edge on hover or when picked. */
+  /* Two panels on one set of rows. Each spans every row and hands its children
+     to the parent's row lines (subgrid), so the kind boxes line up across the
+     gap instead of each column flowing at its own pace. Without subgrid the
+     panels simply stack their own children — unaligned, but not broken. */
+  .scopegrid{ display:grid; grid-template-columns:1fr 1fr; gap:14px;
+    align-items:start; margin-top:10px; }
+  .mappanel{ display:grid; grid-row:1 / -1; grid-template-rows:subgrid;
+    align-content:start; border:1px solid var(--border); border-radius:8px;
+    padding:10px 12px; }
+  /* Left in the flow even when empty: display:none would take its row away from
+     one panel only, and the boxes below it would stop lining up. */
+  .movebar{ min-height:0; }
+  .mappanel.picking{ border-color:var(--accent); box-shadow:0 0 0 1px var(--accent); }
+  .mappanel .mapband{ margin-top:0; }
+  .kindbox{ border:1px solid var(--line); border-radius:6px; padding:6px 10px 8px;
+    margin:8px 0; }
+  .kindbox:last-child{ margin-bottom:0; }
+  .mappanel .mapnode input[type=checkbox],
+  .mapnode input[type=checkbox]{ flex:0 0 auto; width:13px; height:13px; margin:0; }
+  .mappanel.picking button{ padding:5px 10px; font-size:12px; }
+  .act{ cursor:pointer; color:var(--accent); }
+  /* The map has the width to itself until you open a node; then it gives up the
+     right-hand third rather than pushing the whole list down the page. */
+  /* The map card and the detail card are siblings, not one inside the other —
+     a bordered panel nested in a bordered panel reads as a mistake.
+     The right column is always there, empty until you click something: a panel
+     that appears on click shoves the whole list sideways as it arrives. */
+  .mapwrap{ display:grid; grid-template-columns:1fr; gap:14px; margin-bottom:6px;
+    align-items:stretch; }
+  .mapwrap.withdetail{ grid-template-columns:minmax(0,1fr) 380px; }
+  /* Not sticky: a panel that slides down the page as you scroll a list is
+     chasing you, and this one is read at the point you clicked. */
+  .mapdetail{ align-self:stretch; container-type:inline-size; }
+  .mapdetail > .card{ height:100%; }
+  /* The run panes split output from findings side by side. In this column that
+     is two narrow gutters, so below a point they stack instead. */
+  @container (max-width:560px){ .mapdetail .split{ grid-template-columns:1fr; } }
+  @media (max-width:900px){
+    .mapwrap.withdetail{ grid-template-columns:1fr; }
+    .mapdetail > .card{ height:auto; }
+  }
   .manual{ margin-top:12px; padding-top:12px; border-top:1px solid var(--line); }
   .manual textarea{ width:100%; box-sizing:border-box; font-family:ui-monospace,
     SFMono-Regular,Menlo,monospace; font-size:12px; padding:8px;
@@ -126,9 +233,24 @@
   .mapgroup{ margin-top:10px; }
   .mapkind{ font-size:11px; text-transform:uppercase; letter-spacing:.5px;
     color:var(--dim); margin-bottom:4px; }
-  .mapnode{ display:flex; align-items:center; gap:8px; padding:3px 6px;
-    border-radius:4px; cursor:pointer; font-size:13px; }
-  .mapnode:hover{ background:var(--bg); }
+  /* One bordered box per node. The name row and whatever was learned about it
+     are one target: the resolution line belongs to the thing above it, and
+     having only the name clickable meant half the box did nothing. */
+  .mapitem{ border:1px solid transparent; border-radius:6px; padding:6px 8px;
+    margin:4px 0; cursor:pointer; }
+  .mapitem:hover{ background:var(--panel); border-color:var(--accent); }
+  .mapitem:hover code{ color:var(--accent); }
+  .mapitem.picked{ background:var(--panel); border-color:var(--accent); }
+  .mapitem.open{ background:var(--panel); border-color:var(--accent);
+    box-shadow:0 0 0 1px var(--accent); }
+  .mapitem.open code{ color:var(--accent); }
+  .mapnode{ display:flex; align-items:center; gap:8px; font-size:13px; }
+  /* `code` breaks anywhere globally, which is right for a docker image id and
+     wrong for a hostname: it split www.wuguishifu.dev after the "de". The name
+     takes the room it needs; the marks beside it stay on one line. */
+  .mapnode code{ flex:1 1 auto; min-width:0; word-break:normal;
+    overflow-wrap:anywhere; }
+  .mapnode > span{ flex:0 0 auto; white-space:nowrap; }
   .mapnode.dim{ opacity:.45; }
   .pill{ font-size:10px; padding:1px 6px; border-radius:8px;
     border:1px solid var(--line); color:var(--muted); }
@@ -157,6 +279,11 @@
     border-radius:6px; padding:6px; }
   .promoterows label{ display:flex; align-items:center; gap:8px; padding:3px 4px;
     border-radius:4px; cursor:pointer; }
+  /* Never shrink the tick, and let a long name wrap instead of pushing on it:
+     that is what keeps the column straight down the list. */
+  .promoterows input[type=checkbox]{ flex:0 0 auto; width:14px; height:14px; margin:0; }
+  .promoterows label code{ min-width:0; overflow-wrap:anywhere; }
+  .promoterows label .sub{ flex:0 0 auto; margin-top:0; }
   .promoterows label:hover{ background:var(--panel); }
   .promoterows label.oos code{ opacity:.6; }
   table.hist td{ padding:6px 8px; vertical-align:top; }
@@ -248,7 +375,6 @@ let SECTION_LABEL = new Map();
 let switcherOpen = false;
 let mapData = {nodes:{}, edges:{}};
 let mapCount = 0;
-let showDismissed = false;
 
 function applyProject(p){
   proj = p || null;
@@ -296,8 +422,13 @@ async function switchProject(id){
   await loadProjects(id);
   switcherOpen = false;
   mapData = {nodes:{}, edges:{}};      // never show one client's map under another
+  // Runs are filed per engagement too, so the panes have to be re-read rather
+  // than carried across — otherwise one client's scan output sits under another.
+  runs.clear(); runout.clear(); promote.clear();
+  restored = false;
   setView("map");
   loadMap();
+  restoreRuns();
 }
 
 const tools = new Map();      // id -> record
@@ -316,6 +447,33 @@ function bytes(n){
   if(n < 1024) return n + " B";
   if(n < 1024*1024) return (n/1024).toFixed(n < 10240 ? 1 : 0) + " KB";
   return (n/1048576).toFixed(1) + " MB";
+}
+
+// Does this retained file belong in the tool's file list? A tool declares its
+// output as basename globs (bbot: output.*, subdomains.txt); one that declares
+// nothing lists everything it wrote, which is right for nmap's three formats.
+// Nothing is deleted either way — this is the listing, not the run directory.
+// The files a run retained, as links. Shared by the tool card and the
+// reconnaissance panel, so both list the same files by the same rule rather
+// than drifting apart — the retained output is the evidence either way.
+function runFiles(t, r){
+  const files = (r && !r.busy && r.run && r.files)
+    ? r.files.filter(f=>isOutputFile(t, f.name)) : [];
+  if(!files.length) return "";
+  return `<div class="runfiles">${files.map(f=>
+    `<a href="/projects/${proj.id}/runs/${encodeURIComponent(r.run)}/files/${
+       f.name.split("/").map(encodeURIComponent).join("/")}" target="_blank"
+       rel="noopener">${esc(f.name)}</a><span class="sub">${bytes(f.bytes)}</span>`
+  ).join("")}</div>`;
+}
+
+function isOutputFile(t, name){
+  const pats = (t && t.output_files) || [];
+  if(!pats.length) return true;
+  const base = name.replace(/\\/g, "/").split("/").pop();
+  return pats.some(p => new RegExp("^" + p.split("*")
+      .map(s=>s.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join(".*") + "$", "i")
+    .test(base));
 }
 
 /* ---- ANSI → HTML, so output looks like the real terminal ----
@@ -403,6 +561,7 @@ function connect(){
     render();
     // fetch logs for anything already in flight or finished
     tools.forEach((t,id) => { if(!logs.has(id)) fetchLog(id); });
+    restoreRuns();
   });
   es.addEventListener("status", e => {
     const t = JSON.parse(e.data); tools.set(t.id, t);
@@ -416,27 +575,85 @@ function connect(){
   });
   es.addEventListener("run_start", e => {
     const d = JSON.parse(e.data);
-    runout.set(d.id, ""); runs.set(d.id, {busy:true}); render();
+    // The previous run's offer belongs to the previous run's output. A run you
+    // started yourself opens the Tools list and its own card, since a run you
+    // cannot see is worse than no run at all — but not one the sequence owns,
+    // which has its own panel.
+    runout.set(d.id, ""); runs.set(d.id, {busy:true}); promote.delete(d.id);
+    if(!(recon && recon.pending.has(d.id))){
+      open.add(d.id);
+      const t = tools.get(d.id);
+      if(t && t.section) openTools.add(t.section);   // so the output is visible
+    }
+    render();
   });
   es.addEventListener("run_log", e => {
     const d = JSON.parse(e.data);
     runout.set(d.id, (runout.get(d.id)||"") + d.line);
+    if(recon && recon.pending.has(d.id)){ reconScan(d.id, d.line); paintRecon(d.id); }
     paintRun(d.id);
   });
   es.addEventListener("run_done", e => {
     const d = JSON.parse(e.data);
     runs.set(d.id, {code:d.code, files:d.files, error:d.error, run:d.run});
+    runHistory.set(d.id, Date.now()/1000);
+    // A run the sequence started is reviewed by the sequence, in one merged
+    // box. Leaving the per-tool offer to fire as well would ask you the same
+    // question twice, in two places, about the same names.
+    if(recon && recon.pending.has(d.id)){
+      if(d.run && !d.error) recon.runs[d.id] = d.run;
+      if(d.error) recon.msg = `${d.id}: ${d.error}`;
+      recon.pending.delete(d.id);
+      render();
+      if(!recon.pending.size) reconAdvance();
+      return;
+    }
     render();
     if(d.run && !d.error) offerPromote(d.id, d.run);
   });
   es.addEventListener("removed", e => {
     const d = JSON.parse(e.data);
-    tools.delete(d.id); logs.delete(d.id); runout.delete(d.id); runs.delete(d.id); render();
+    tools.delete(d.id); logs.delete(d.id); runout.delete(d.id); runs.delete(d.id);
+    promote.delete(d.id); render();
   });
 }
 async function fetchLog(id){
   try{ const d = await (await fetch(`/tools/${id}/log`)).json();
        if(d.log){ logs.set(id, d.log); paintLog(id); } }catch(e){}
+}
+
+// Run output lived only in the browser, while the run itself was filed on disk.
+// A refresh therefore emptied the output pane, the file list and the promote box
+// of a scan that had already happened — the only way back to the decision was to
+// run the whole thing again. Read the newest recorded run of each tool back in
+// instead. Guarded so it happens once per selected engagement.
+let restored = false;
+async function restoreRuns(){
+  if(restored || !proj) return;
+  restored = true;
+  const pid = proj.id;
+  await Promise.all([...tools.keys()].map(async id => {
+    if(runs.has(id)) return;            // a live run outranks a recorded one
+    try{
+      const d = await (await fetch(`/projects/${pid}/runs/${id}`)).json();
+      const last = (d.runs || [])[0];   // for_tool() sorts newest first
+      if(!last || proj.id !== pid) return;
+      // When this tool last finished, which is what the checklist reads to work
+      // out whether a phase has been done in this engagement.
+      if(last.finished_at) runHistory.set(id, last.finished_at);
+      runs.set(id, {code:last.exit_code, files:last.files,
+                    error:last.error, run:last.id});
+      const full = await (await fetch(`/projects/${pid}/runs/${id}/${last.id}`)).json();
+      if(proj.id === pid) runout.set(id, full.output || "");
+    }catch(e){}
+  }));
+  if(proj.id !== pid) return;           // switched engagements while loading
+  render();
+  // Re-offer what each restored run found. Rows already on the map come back
+  // marked known, so this shows what was scanned without re-promoting anything.
+  runs.forEach((r, id) => {
+    if(r && r.run && !r.busy && !r.error && !promote.has(id)) offerPromote(id, r.run);
+  });
 }
 
 /* ---- actions ---- */
@@ -506,6 +723,7 @@ async function clearAll(){
   try{
     const d = await (await fetch("/tools",{method:"DELETE"})).json();
     tools.clear(); logs.clear(); runout.clear(); runs.clear(); open.clear();
+    promote.clear();
     box.value = "";
     msg.textContent = `removed ${d.removed.length} tool(s), ${d.cache} cached entries`;
     await loadProjects(proj && proj.id); render();
@@ -587,6 +805,30 @@ function ago(ts){
   return new Date(ts*1000).toLocaleDateString();
 }
 
+// The command this tool would run right now, substitutions filled in. Lives
+// here rather than inside the card because the reconnaissance sequence starts
+// tools that you never clicked: reading the command out of the DOM only works
+// for a card you are looking at.
+//
+// Baseline commands are written against the scope — {{scope}} is everything you
+// were given, domains and CIDRs, space separated; {{targets}} is domains only,
+// comma separated for tools that take a list; {{target}} is the primary one. So
+// editing the scope changes what every baseline tool runs against.
+//
+// `generatedOnly` asks for the template's own answer, ignoring your override —
+// the card needs that to show what it would otherwise have run.
+function plannedCommand(t, generatedOnly){
+  if(!generatedOnly && (t.command_override||"").trim()) return t.command_override;
+  const tmpl = t.run_template || "";
+  const target = (proj && proj.target) || "";
+  if(!tmpl || !target) return "";
+  const targets = ((proj && proj.targets) || []).join(",");
+  const scopeAll = ((proj && proj.scope_all) || []).join(" ");
+  return tmpl.replaceAll("{{scope}}", scopeAll || target)
+             .replaceAll("{{targets}}", targets || target)
+             .replaceAll("{{target}}", target);
+}
+
 // Which phase a tool is filed under, so a run is attributed correctly no matter
 // where on the page you started it from.
 function sectionOf(id){
@@ -596,7 +838,7 @@ function sectionOf(id){
   return t && t.baseline ? "baseline" : "";
 }
 
-async function doRun(id){
+async function doRun(id, force){
   const command = document.getElementById("cmd-"+id).value.trim();
   if(!command) return;
   runs.set(id, {busy:true}); runout.set(id, ""); render();
@@ -605,9 +847,13 @@ async function doRun(id){
       headers:{"Content-Type":"application/json"},
       // The engagement and section are what make the recorded run attributable.
       body:JSON.stringify({command, project: proj?proj.id:"", section: sectionOf(id),
+                           force: !!force,
                            input: (document.getElementById("in-"+id)||{}).value
                                   || inbox.get(id) || ""})})).json();
-    if(d.error){ runs.set(id, {error:d.error}); render(); }
+    // Refused for scope: keep the reason and offer the deliberate override,
+    // rather than a dead error you have to work around by editing the command.
+    if(d.out_of_scope){ runs.set(id, {error:d.error, refused:d.out_of_scope}); render(); }
+    else if(d.error){ runs.set(id, {error:d.error}); render(); }
     // success: output arrives via run_log/run_done on the event stream
   }catch(e){ runs.set(id, {error:"request failed"}); render(); }
 }
@@ -617,11 +863,18 @@ async function refreshHelp(id){
   const t = tools.get(id);
   if(t && d.help_text !== undefined){ t.help_text = d.help_text; render(); }
 }
+// Follow the tail, unless you have scrolled up to read something — in which
+// case the next line of a noisy scan would drag you back down mid-sentence.
+function stickToBottom(p, html){
+  const following = p.scrollHeight - p.scrollTop - p.clientHeight < 40;
+  p.innerHTML = html;
+  if(following) p.scrollTop = p.scrollHeight;
+}
+
 function paintRun(id){
   const p = document.getElementById("run-"+id);
   if(!p) return;   // not on screen; the buffer paints when the view opens
-  p.innerHTML = ansiToHtml(clip(runout.get(id)));
-  p.scrollTop = p.scrollHeight;
+  stickToBottom(p, ansiToHtml(clip(runout.get(id))));
 }
 
 /* ---- render ---- */
@@ -672,7 +925,26 @@ function renderNav(){
          title="${navOpen?'Collapse':'Expand'} sidebar">${navOpen?'‹':'›'}${badge}</button></div>`;
 }
 
+// A card's HTML is rebuilt wholesale on every render, so anything painted into
+// one afterwards — the promote box — has to be painted again or it vanishes on
+// the next unrelated status event.
 function render(){
+  // Assigning innerHTML empties the container before refilling it, so for one
+  // frame the document has no height and the browser clamps the scroll position
+  // to zero. Restoring it in the same tick means it never visibly moves —
+  // without this, a scan finishing while you are reading three screens down
+  // throws you back to the top, every time an event arrives.
+  const y = window.scrollY;
+  renderView();
+  promote.forEach((st, id)=>paintPromote(id));
+  if(window.scrollY !== y) window.scrollTo(0, y);
+  // The output panes are rebuilt too, and a rebuilt pane starts at the top of
+  // the log. These follow the tail, so put them back on it.
+  document.querySelectorAll("pre.term[id^='rrun-'], pre.term[id^='run-']")
+    .forEach(p=>{ p.scrollTop = p.scrollHeight; });
+}
+
+function renderView(){
   // Start at the first phase of an engagement, whether or not it has tools yet.
   if(!view){
     view = SECTIONS[0][0];
@@ -698,7 +970,7 @@ function render(){
   // `card` is a const, so every use has to come after this point — calling it
   // above threw a ReferenceError that silently aborted the rest of render(),
   // leaving "All tools" stuck on its placeholder.
-  const card = (t, mode, sect)=>{
+  const card = (t, mode, sect, fold)=>{
     const working = ACTIVE.includes(t.status);
     const wait = (t.status==="queued" && t.queue_position>0) ? ` (position ${t.queue_position})` : "";
     const badge = `<span class="badge ${t.status}">${working?'<span class="spin"></span> ':''}${t.status}${wait}</span>`;
@@ -711,26 +983,13 @@ function render(){
     // "<tool> example.com" guess is worse than no guess — it teaches the wrong
     // invocation (bbot actually needs -t).
     const tmpl = t.run_template || "";
-    const target = (proj && proj.target) || "";
-    const targets = ((proj && proj.targets) || []).join(",");
-    // Baseline commands are written against the scope: {{targets}} for tools
-    // that take a list, {{target}} for tools that take one. Filling them here
-    // means editing the scope changes what every baseline tool runs against.
-    // {{scope}} is everything you were given (domains and CIDRs), space
-    // separated for tools that take a target list; {{targets}} is domains only;
-    // {{target}} is the primary one.
-    const scopeAll = ((proj && proj.scope_all) || []).join(" ");
-    const ready = tmpl && target
-      ? tmpl.replaceAll("{{scope}}", scopeAll || target)
-            .replaceAll("{{targets}}", targets || target)
-            .replaceAll("{{target}}", target)
-      : "";
+    const ready = plannedCommand(t, true);
     // The generated command is authoritative; an override is yours and shadows
     // it until you clear it. Running no longer captures the command, so fixing
     // a baseline command reaches every project instead of being permanently
     // masked by whatever was typed once.
     const overridden = !!(t.command_override||"").trim();
-    const prefill = overridden ? t.command_override : ready;
+    const prefill = plannedCommand(t);
     const editing = cmdEdit.has(t.id);
     const hint = ready || (/^\S+\s+-/.test(tmpl)
       ? tmpl.replace("{{target}}", "example.com")
@@ -741,18 +1000,19 @@ function render(){
     // label and shouting. It gets its own row below instead.
     let footer = "";
     if (busy)              footer = `<span class="running">running…</span>`;
+    else if (r && r.refused) footer = `<span class="err">${esc(r.error)}</span>
+        <button class="mini ghost" style="margin-left:6px"
+          title="Records the run as forced"
+          onclick="doRun('${t.id}', true)">Run it anyway</button>`;
     else if (r && r.error) footer = `<span class="err">${esc(r.error)}</span>`;
     else if (r && r.code !== undefined)
       footer = `<span class="${r.code===0?'exit0':'exitN'}">exit ${r.code}</span>`;
 
     // Retained output is evidence, so it is worth opening, not just counting.
-    const filerow = (!busy && r && r.run && r.files && r.files.length)
-      ? `<div class="runfiles">${r.files.map(f=>
-          `<a href="/projects/${proj.id}/runs/${encodeURIComponent(r.run)}/files/${
-             f.name.split("/").map(encodeURIComponent).join("/")}" target="_blank"
-             rel="noopener">${esc(f.name)}</a><span class="sub">${bytes(f.bytes)}</span>`
-        ).join("")}</div>`
-      : "";
+    // A tool that declares which of its files are output is listed down to
+    // those: everything a scan wrote is still on disk, but bbot's nine working
+    // files buried the four you came for.
+    const filerow = runFiles(t, r);
 
     const runPane = `
       <div class="runbox">
@@ -786,9 +1046,17 @@ function render(){
           const val = inbox.get(t.id) || "";
           const n = val.split("\n").filter(l=>l.trim()).length;
           const editing = inEdit.has(t.id);
+          // Naming what was withheld matters more than the count that is here:
+          // a list quietly two short is how you end up thinking a host was
+          // scanned when it never was.
           const label = n
-            ? `<b>${n}</b> ${mi.kind||"target"}${n===1?"":"s"} from the map`
-            : `<span class="exitN">nothing on the map to scan yet</span>`;
+            ? `<b>${n}</b> ${mi.kind||"target"}${n===1?"":"s"} from the map${
+                mi.held ? ` · <span class="exitN">${mi.held} out of scope held
+                  back</span>` : ""}`
+            : mi.held
+              ? `<span class="exitN">nothing in scope to scan — ${mi.held} out of
+                 scope held back</span>`
+              : `<span class="exitN">nothing on the map to scan yet</span>`;
           return `<div class="inwrap">
             <div class="lbl" style="margin-top:10px"><span>will scan</span>
               <span class="sub">
@@ -868,10 +1136,16 @@ function render(){
           <a class="${tab==='log'?'on':''}" onclick="setPane('${t.id}','log')">Setup Log</a>
           <a class="${tab==='hist'?'on':''}" onclick="showHistory('${t.id}')">History</a>
         </div></div>`;
-    // A section is where you work, so its cards stay open — collapsing the run
-    // box behind a click is friction on the thing you came here to do. Add Tool
-    // keeps the fold: it lists everything, and setup logs are long.
-    const expanded = mode === "run" || open.has(t.id);
+    // A phase is where you work on one or two tools, so its cards stay open —
+    // collapsing the run box behind a click is friction on the thing you came
+    // there to do. The Map and Add Tool fold instead: six baseline cards, each
+    // with a command line, an output pane and a --help pane, is a wall you have
+    // to scroll past to reach the map they exist to fill in.
+    //
+    // A running tool opens itself, and stays open afterwards, because the
+    // output arriving is the reason you started it.
+    const folds = fold || mode === "manage";
+    const expanded = folds ? (open.has(t.id) || busy) : true;
     const bodyHtml = !expanded ? ""
       : mode === "manage" ? infoPane
       : t.status !== "ready" ? notReady
@@ -880,11 +1154,13 @@ function render(){
                     <div class="sub">loading…</div></div></div>`
                 : infoPane);
     return `<div class="card">
-      <div class="top" ${mode === "manage" ? `onclick="toggle('${t.id}')"`
-                                           : 'style="cursor:default"'}>
-        <div><span class="nm">${esc(t.id)}</span>
-          ${t.purpose ? `<div class="sub">${esc(t.purpose)}</div>` : detail}</div>
-        <div class="right">${badge}${actions}
+      <div class="top" ${folds ? `onclick="toggle('${t.id}')"`
+                               : 'style="cursor:default"'}>
+        <div><span class="nm">${folds
+            ? `<span class="fold">${expanded ? "▾" : "▸"}</span> ` : ""}${esc(t.id)}</span>
+          ${mode === "run" && t.baseline ? "" : detail}</div>
+        <div class="right">
+          ${folds && !expanded ? footer : ""}${badge}${actions}
           ${mode === "manage"
             ? `<button class="ghost" title="Uninstall the image everywhere"
                  onclick="event.stopPropagation();drop('${t.id}')">✕</button>`
@@ -938,51 +1214,379 @@ function render(){
 function paintLog(id){
   const p = document.getElementById("log-"+id);
   if(!p) return;   // not on screen; the buffer paints when the view opens
-  p.innerHTML = ansiToHtml(clip(logs.get(id)));
-  p.scrollTop = p.scrollHeight;
+  stickToBottom(p, ansiToHtml(clip(logs.get(id))));
 }
 
 /* ---- promoting run output onto the map ---- */
 
 // Ask the server what it sees. Nothing is written — this is the decision view.
+// The answer is kept per tool rather than left in the DOM, so a render, a status
+// event or a page refresh cannot throw away a decision you have not made yet.
 async function offerPromote(toolId, runId){
-  const box = document.getElementById(`promote-${toolId}`);
-  if(!box) return;
-  box.innerHTML = `<div class="sub">reading output…</div>`;
+  promote.set(toolId, {run:runId, loading:true, rows:[], edges:[],
+                       total:0, news:[], sel:new Set(), msg:"", done:false});
+  paintPromote(toolId);
   let d;
   try{
     d = await (await fetch(`/projects/${proj.id}/map/classify`,{method:"POST",
       headers:{"Content-Type":"application/json"},
       body:JSON.stringify({run:runId})})).json();
-  }catch(e){ box.innerHTML = ""; return; }
-  if(!d.total){ box.innerHTML = `<div class="sub">nothing recognisable to promote</div>`; return; }
+  }catch(e){ promote.delete(toolId); paintPromote(toolId); return; }
 
-  promoteRows.set(toolId, {rows:d.rows, run:runId, edges:d.edges||[]});
-  const news = d.rows.filter(r=>!r.known);
-  const oos  = news.filter(r=>!r.in_scope).length;
+  promote.set(toolId, {run:runId, loading:false, rows:d.rows||[],
+                       edges:d.edges||[], total:d.total||0, folded:d.folded||{},
+                       missing:d.missing_result||"",
+                       // Set when the run was aimed at a node: the server links
+                       // what lands to it and marks the check against it.
+                       parent:nodeRunOf.get(toolId) || "",
+                       sel:new Set(), touched:new Set(),   // by row id, not index
+                       msg:""});
+  paintPromote(toolId);
+}
 
-  // Uniform, in-scope, new rows are pre-selected. Reviewing 500 lines was never
-  // going to happen; reviewing the handful that are new and unexpected will.
+// What the classify said, re-read against the map as it is now. Status is not
+// taken from the response: the map changes under this box — you delete a node,
+// promote from another tool — and a cached "already known" then hides a row you
+// have just removed, with no way back short of re-running the scan.
+function promoteView(st){
+  const rows = (st.rows||[]).map(r=>{
+    const n = (mapData.nodes||{})[r.id];
+    return {...r, known: !!n, in_scope: n ? n.in_scope !== false : r.in_scope};
+  });
+  const fresh = rows.filter(r=>!r.known);
+  return {rows, fresh, offered: fresh};
+}
+
+// In scope, and you have not said otherwise. Reviewing 500 lines was never going
+// to happen; reviewing the handful that are new and unexpected will.
+const promoteChecked = (st, r) =>
+  st.touched.has(r.id) ? st.sel.has(r.id) : r.in_scope;
+
+// Draws the box from that kept state. Pure paint — no fetch — so it is safe to
+// call on every render.
+function paintPromote(toolId){
+  const box = document.getElementById(`promote-${toolId}`);
+  if(!box) return;                 // tool not on screen; paints when it is
+  const st = promote.get(toolId);
+  if(!st){ box.innerHTML = ""; return; }
+  if(st.loading){ box.innerHTML = `<div class="sub">reading output…</div>`; return; }
+  if(!st.total){
+    // Which is a very different thing from "the command never wrote the file
+    // its results were supposed to be in".
+    box.innerHTML = st.missing
+      ? `<div class="sub"><span class="exitN">this run wrote no
+           <code>${esc(st.missing)}</code></span> — promotion reads that file and
+           nothing else, so check the command still writes it</div>`
+      : `<div class="sub">nothing recognisable to promote</div>`;
+    return;
+  }
+  const {fresh, offered} = promoteView(st);
+  const oos = fresh.filter(r=>!r.in_scope).length;
+  // Relations this output reports that both ends are on the map for, and that
+  // the map does not have yet. Usually zero — new rows bring their edges with
+  // them — but it is how a resolution promoted before edges landed correctly
+  // gets connected without clearing the map and scanning again.
+  const hasEdge = e => Object.values(mapData.edges||{})
+    .some(x=>x.frm===e.frm && x.rel===e.rel && x.to===e.to);
+  const onMap = id => !!(mapData.nodes||{})[id];
+  const missing = (st.edges||[]).filter(e=>onMap(e.frm) && onMap(e.to) && !hasEdge(e));
+
+  // Names under a wildcard are reported, not offered — you should know the scan
+  // saw them, and that they are one host rather than a dozen findings.
+  const folds = Object.entries(st.folded||{});
+  const foldedN = folds.reduce((n,[,c])=>n+c, 0);
+  const foldLine = foldedN
+    ? ` · ${foldedN} folded into ${folds.map(([p])=>"*."+esc(p)).join(", ")}` : "";
+
   box.innerHTML = `
     <div class="lbl" style="margin-top:10px"><span>promote to map</span>
-      <span class="sub">${d.total} found · ${news.length} new
-        ${oos?`· <span class="exitN">${oos} out of scope</span>`:""}</span></div>
-    ${news.length ? `
-      <div class="promoterows">${news.map((r,i)=>`
+      <span class="sub">${st.total} found · ${fresh.length} new
+        ${missing.length?` · ${missing.length} link${missing.length===1?"":"s"}`:""}
+        ${oos?` · <span class="exitN">${oos} out of scope</span>`:""}${foldLine}</span></div>
+    ${offered.length ? `
+      <div class="promoterows">${offered.map(r=>`
         <label class="${r.in_scope?"":"oos"}">
-          <input type="checkbox" data-i="${i}" ${r.in_scope?"checked":""}>
+          <input type="checkbox" ${promoteChecked(st,r)?"checked":""}
+                 onchange="togglePromote('${toolId}','${esc(r.id)}',this.checked)">
           <code>${esc(r.line)}</code>
           <span class="sub">${esc(r.kind)}${r.in_scope?"":" · outside scope"}</span>
         </label>`).join("")}</div>
       <div class="fields" style="margin-top:8px">
         <button onclick="commitPromote('${toolId}')">Add selected</button>
         <button class="ghost" onclick="commitPromote('${toolId}', true)"
-          title="${oos ? `Includes ${oos} outside scope` : "Every new row"}"
-          >Add all ${news.length}</button>
-        <span class="sub" id="promsg-${toolId}"></span>
+          title="${oos ? `Includes ${oos} outside scope` : "Every row offered"}"
+          >Add all ${offered.length}</button>
+        <span class="sub" id="promsg-${toolId}">${esc(st.msg)}</span>
       </div>`
-    : `<div class="sub">all ${d.total} already on the map</div>`}`;
-  promoteNew.set(toolId, news);
+    : `<div class="sub">all ${st.total} already on the map</div>
+       ${missing.length ? `<div class="fields" style="margin-top:8px">
+         <button onclick="commitPromote('${toolId}', false, true)"
+           title="Connect nodes this output says are related">Add ${missing.length}
+           link${missing.length===1?"":"s"}</button>
+         <span class="sub" id="promsg-${toolId}">${esc(st.msg)}</span></div>` : ""}`}`;
+}
+
+// Ticks live in the state, not the checkboxes, for the same reason as above —
+// and by row id, not row position, because the offered list changes as the map
+// does. An index-keyed tick silently moved to a different row.
+function togglePromote(toolId, id, on){
+  const st = promote.get(toolId);
+  if(!st) return;
+  st.touched.add(id);
+  on ? st.sel.add(id) : st.sel.delete(id);
+}
+
+
+/* ---- the reconnaissance sequence ----------------------------------------
+   Discover with every subdomain tool at once, review the union once, then
+   resolve what you accepted. Three steps because of where the decision sits:
+   everything before the review is public sources, everything after it is the
+   map, and the map is what the active tools are pointed at.
+
+   Driven by the coverage kinds the baseline already declares, not by tool name
+   — add a third subdomain-enum tool and it joins the parallel start; swap dig
+   for another `resolve` tool and the last step follows it.
+*/
+let recon = null;   // {step, pending:Set, runs:{tool->runId}, resolver, msg, note}
+
+// What each tool has turned up so far, read from its own stream. Live, because
+// a passive source gives you no other progress signal: a subdomain appearing is
+// the only sign the thing is working.
+const reconSeen = new Map();   // tool id -> Set of values, in arrival order
+
+// Deliberately narrow. bbot's log carries pip output, tracebacks and its own
+// filenames, and a greedy match offers all of them as findings — anchoring to
+// the engagement's own domains keeps this column to things that could actually
+// be results. It is a progress view, not a decision: what lands on the map is
+// still the server reading the tool's result file when the run ends.
+function reconScan(id, chunk){
+  const roots = ((proj && proj.scope_all) || []).filter(r=>!r.includes("/"));
+  const wantIps = ((tools.get(id)||{}).check === "resolve");
+  const set = reconSeen.get(id) || new Set();
+  const add = v => { if(set.size < 400) set.add(v); };
+  (chunk.match(/[a-z0-9_*.-]+/gi) || []).forEach(tok=>{
+    const v = tok.toLowerCase().replace(/^[_*]wildcard\./, "").replace(/^\*\./, "")
+                 .replace(/\.$/, "");
+    if(roots.some(r=>v === r || v.endsWith("." + r))) add(v);
+  });
+  if(wantIps) (chunk.match(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g) || []).forEach(add);
+  reconSeen.set(id, set);
+}
+
+const reconDiscovery = () => [...tools.values()]
+  .filter(t=>t.baseline && t.check === "subdomain-enum" && t.status === "ready")
+  .sort((a,b)=>(a.baseline_order||0)-(b.baseline_order||0));
+const reconResolver = () => [...tools.values()]
+  .find(t=>t.baseline && t.check === "resolve" && t.status === "ready");
+
+// Run a phase. Reconnaissance is the two-stage one — enumerate with everything
+// that discovers, map it, then resolve what came back — because resolution has
+// to see the names first. Every other phase is one stage: its tools all read
+// the map, so they can go at once and their output is mapped when they finish.
+async function startPhase(key){
+  const ready = phaseTools(key).filter(t=>t.status === "ready");
+  if(!proj || !ready.length || (recon && recon.step !== "done")) return;
+  const twoStage = key === reconPhase();
+  const first = twoStage ? reconDiscovery() : ready;
+  if(!first.length) return;
+  recon = {phase:key, twoStage, step:"discovery",
+           pending:new Set(first.map(t=>t.id)), runs:{}, mapped:{},
+           msg:"", note:""};
+  reconSeen.clear();
+  openTools.delete(key);      // the sequence has its own panes; the cards would
+  render();                   // put the same streams on screen twice
+  // Together, not in turn: they read the map rather than each other, so running
+  // them in sequence only costs you the slower one.
+  await Promise.all(first.map(t=>reconRun(t, mapInput(t.id).vals.join("\n"))));
+}
+const startRecon = () => startPhase(recon ? recon.phase : reconPhase());
+
+function cancelRecon(){ recon = null; render(); }
+
+async function reconRun(t, inputText){
+  const command = plannedCommand(t);
+  if(!command){
+    recon.pending.delete(t.id);
+    recon.msg = `${t.id}: no command to run — check its Run box`;
+    render();
+    return;
+  }
+  // No open.add here: the sequence shows this run in its own panel, and
+  // expanding the card as well would put the same stream on screen twice.
+  runs.set(t.id, {busy:true}); runout.set(t.id, ""); promote.delete(t.id);
+  render();
+  try{
+    const d = await (await fetch(`/tools/${t.id}/run`,{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({command, project: proj.id, section: sectionOf(t.id),
+                           input: inputText || ""})})).json();
+    if(d.error){
+      runs.set(t.id, {error:d.error});
+      recon.pending.delete(t.id);
+      recon.msg = `${t.id}: ${d.error}`;
+      render();
+    }
+  }catch(e){
+    runs.set(t.id, {error:"request failed"});
+    recon.pending.delete(t.id);
+    recon.msg = `${t.id}: request failed`;
+    render();
+  }
+}
+
+// Every tool in the current step has finished.
+function reconAdvance(){
+  if(recon.step === "discovery") reconMap();
+  else if(recon.step === "resolve") reconResolved();
+}
+
+// Everything both tools found goes on the map, unreviewed. Nothing is thrown
+// away at this point and nothing is judged: what a public source says exists is
+// a fact worth recording either way, and the map flags each name against the
+// engagement's scope so the ones that are yours to scan are already separated
+// from the ones that merely came back with them.
+async function reconMap(){
+  recon.step = "mapping"; recon.msg = "reading output…"; render();
+
+  // Read every tool before deciding anything. Folding has to see the whole
+  // round: bbot reports the wildcard and subfinder reports the names sitting
+  // under it, so classifying-and-posting one tool at a time meant the fold
+  // depended on which container happened to finish first — the same scan
+  // mapping two junk nodes or none, run to run.
+  const results = [];
+  for(const [tool, runId] of Object.entries(recon.runs)){
+    try{
+      const d = await (await fetch(`/projects/${proj.id}/map/classify`,{method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({run:runId})})).json();
+      results.push({tool, runId, d});
+    }catch(e){ recon.msg = `${tool}: could not read its output`; }
+  }
+  const wilds = new Set([
+    ...Object.values(mapData.nodes||{})
+      .filter(n=>(n.tags||[]).includes("wildcard")).map(n=>n.value),
+    ...results.flatMap(({d})=>(d.rows||[]).filter(r=>r.wildcard).map(r=>r.value)),
+  ]);
+  const underWildcard = v => [...wilds].find(w=>v !== w && v.endsWith("." + w)) || "";
+
+  const seen = new Set();
+  let added = 0, linked = 0, oos = 0, under = 0;
+  // Per run, not as one batch: a node records the run and tool that found it,
+  // and merging two tools' rows into one post would credit both to whichever
+  // run id was sent.
+  for(const {tool, runId, d} of results){
+    // The same name from both tools is one node; the first to report it keeps
+    // the attribution rather than the map recording whichever finished last.
+    const fresh = (d.rows||[]).filter(r=>!r.known && !seen.has(r.id));
+    // Marked here as well as on the server, because the server only knows the
+    // wildcards it had already been told about — the one bbot found this round
+    // may not have been posted yet when subfinder's rows were classified.
+    const rows = fresh.map(r=>{
+      const w = r.under_wildcard
+        || (r.kind === "domain" && !r.wildcard ? underWildcard(r.value) : "");
+      if(w) under++;
+      return w ? {...r, under_wildcard: w} : r;
+    });
+    rows.forEach(r=>seen.add(r.id));
+    oos += rows.filter(r=>!r.in_scope).length;
+    // What this tool actually contributed, for its column in the panel: the
+    // live list was everything its log mentioned, which is always more.
+    recon.mapped[tool] = rows.map(r=>r.value);
+    const ids = new Set([...rows.map(r=>r.id),
+                         ...Object.keys(mapData.nodes||{})]);
+    const edges = (d.edges||[]).filter(e=>ids.has(e.frm) && ids.has(e.to));
+    if(!rows.length && !edges.length) continue;
+    try{
+      const res = await (await fetch(`/projects/${proj.id}/map`,{method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({run:runId, rows, edges})})).json();
+      added += res.added||0; linked += res.linked||0;
+    }catch(e){ recon.msg = `${tool}: adding failed`; }
+  }
+  recon.note = `${added} on the map`
+    + (oos ? ` · ${oos} out of scope` : "")
+    + (under ? ` · ${under} under a wildcard, scanned as one host` : "");
+  recon.msg = "";
+  await loadMap();
+  // Only reconnaissance has a second stage. Anywhere else, mapping the output
+  // is the end of the run.
+  if(recon.twoStage) return reconResolve();
+  recon.step = "done";
+  recon.msg = added ? "done" : "nothing new";
+  render();
+}
+
+// Resolve what is on the map now — including anything that was already there,
+// because the resolver eats the map rather than this run's output.
+async function reconResolve(){
+  const dig = reconResolver();
+  if(!dig){
+    recon.step = "done";
+    recon.msg = "nothing installed that resolves names";
+    render();
+    return;
+  }
+  const mi = mapInput(dig.id);
+  if(!mi.vals.length){
+    recon.step = "done";
+    recon.msg = "nothing on the map to resolve";
+    render();
+    return;
+  }
+  recon.step = "resolve";
+  recon.pending = new Set([dig.id]);
+  recon.runs = {};
+  recon.resolver = dig.id;
+  recon.asked = mi.vals;      // to say which of them came back with nothing
+  render();
+  await reconRun(dig, mi.vals.join("\n"));
+}
+
+// Addresses go on the map without a second review. They are not a discovery you
+// have to judge — they are where the names you already accepted point, and the
+// resolution edge is the only thing that ties a host to the domain it serves.
+// Anything the resolver reports that is *not* a resolution still goes through
+// the normal box on the tool's own card.
+async function reconResolved(){
+  const runId = recon.runs[recon.resolver];
+  if(!runId){ recon.step = "done"; recon.msg = "the resolver produced no run"; render(); return; }
+  recon.msg = "reading resolutions…"; render();
+  try{
+    const d = await (await fetch(`/projects/${proj.id}/map/classify`,{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({run:runId})})).json();
+    const fresh = (d.rows||[]).filter(r=>!r.known);
+    // Ends that are on the map count as much as ends in this output: the domain
+    // half of `domain resolves_to host` is on the map by definition here — you
+    // just promoted it — so requiring both ends in the output would drop every
+    // resolution, which is the whole point of this step.
+    const ids = new Set([...(d.rows||[]).map(r=>r.id),
+                         ...Object.keys(mapData.nodes||{})]);
+    const edges = (d.edges||[]).filter(e=>ids.has(e.frm) && ids.has(e.to));
+    let added = 0, linked = 0;
+    if(fresh.length || edges.length){
+      const res = await (await fetch(`/projects/${proj.id}/map`,{method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({run:runId, rows:fresh, edges})})).json();
+      added = res.added||0; linked = res.linked||0;
+    }
+    recon.mapped[recon.resolver] = fresh.map(r=>r.value);
+    // `+noall +answer` prints nothing at all for a name with no answer, so 13
+    // names in and 5 lines out looks like the resolver dropped eight of them.
+    // It didn't — they have no public record. That is worth knowing: an
+    // internal-only service or a stale certificate entry is a finding, not a
+    // gap in the tooling, and silence is the one thing that reads as a bug.
+    const answered = new Set((d.edges||[])
+      .map(e=>((d.rows||[]).find(r=>r.id === e.frm)||{}).value)
+      .filter(Boolean));
+    recon.unresolved = (recon.asked||[]).filter(v=>!answered.has(v));
+    recon.step = "done";
+    recon.msg = `${added} address${added===1?"":"es"} · ${linked} resolution${linked===1?"":"s"}`
+      + (recon.unresolved.length ? ` · ${recon.unresolved.length} with no DNS answer` : "");
+    await loadMap();
+  }catch(e){
+    recon.step = "done"; recon.msg = "could not read the resolver's output"; render();
+  }
 }
 
 // Input lists per tool. For a tool that declares what it consumes these are
@@ -1041,21 +1645,39 @@ function syncInputBox(id){
 // The map holds the scope roots *and* everything discovered since, so this is
 // how one step's output becomes the next step's input: bbot finds subdomains,
 // dig eats every domain on the map, nmap eats the hosts dig resolved.
-// Whatever is on the map, of the kinds this tool consumes. Deliberately no scope
-// filtering here: scope is decided once, when you promote output onto the map,
-// where the rows are flagged and out-of-scope ones start unchecked. A node that
-// made it past that is one you chose to put there, so re-judging it at input time
-// would only second-guess a decision you already made — and quietly change what
-// gets scanned relative to what the map plainly shows.
+//
+// Past reconnaissance, only in-scope nodes. Everything a scan finds is recorded
+// — a client's mail provider, a CDN, a partner domain in an SPF record — and
+// recording is not permission to touch it. Scope used to be settled by you
+// ticking rows on the way in, so filtering here would have second-guessed a
+// decision you had already made; nothing is confirmed now, so the scope flag is
+// the only thing standing between "bbot mentioned it" and "nmap scanned it".
+//
+// Reconnaissance keeps the whole map: asking a public resolver about a third
+// party's name sends them nothing and is how you learn whose it is.
 function mapInput(id){
   const t = tools.get(id);
   const kinds = (t && t.consumes) || [];
-  const nodes = Object.values(mapData.nodes||{}).filter(n=>!n.dismissed);
+  const passive = !!t && t.section === reconPhase();
+  const all = Object.values(mapData.nodes||{});
+  const nodes = passive ? all : all.filter(n=>n.in_scope !== false);
   for(const kind of kinds){                 // first kind that has anything
-    const vals = nodes.filter(n=>n.kind===kind).map(n=>n.value);
-    if(vals.length) return {kind, vals};
+    // Names under a wildcard all answer with the same address, so handing a
+    // port scanner every one of them scans a single host once per name. The
+    // wildcard itself stays in the list, so the host is still reached — and
+    // this only applies to the name list: once dig has resolved them the tool
+    // takes hosts, which the map already holds one of per address.
+    const vals = nodes.filter(n=>n.kind===kind)
+      .filter(n=>passive || kind !== "domain"
+                 || !(n.tags||[]).includes("under-wildcard"))
+      .map(n=>n.value);
+    if(vals.length){
+      // What was left out, so a short list is explained rather than puzzling.
+      const held = all.filter(n=>n.kind===kind && n.in_scope === false).length;
+      return {kind, vals, held: passive ? 0 : held};
+    }
   }
-  return {kind: kinds[0]||"", vals: []};
+  return {kind: kinds[0]||"", vals: [], held: 0};
 }
 
 // Re-sync a tool's list with the map, discarding edits. Used when a later run
@@ -1075,37 +1697,49 @@ function countInput(id){
   if(el) el.textContent = n ? `${n} line${n===1?"":"s"}` : "";
 }
 
-const promoteRows = new Map();
-const promoteNew  = new Map();
+// What each tool's last run offered, keyed by tool id. See offerPromote.
+const promote = new Map();
 
 // `all` takes every new row regardless of the checkboxes — including the
 // out-of-scope ones, which are deliberately left unchecked. That is the point of
 // having both buttons: "Add selected" respects the in-scope default, "Add all"
 // is how you take affiliate infrastructure (a client's mail provider, say) onto
 // the map on purpose. Out-of-scope nodes are recorded, tagged and never scanned.
-async function commitPromote(toolId, all){
-  const box = document.getElementById(`promote-${toolId}`);
+async function commitPromote(toolId, all, linksOnly){
+  const st = promote.get(toolId);
+  if(!st) return;
   const msg = document.getElementById(`promsg-${toolId}`);
-  const news = promoteNew.get(toolId) || [];
-  const picked = all
-    ? news.slice()
-    : [...box.querySelectorAll("input[type=checkbox]")]
-        .filter(c=>c.checked).map(c=>news[+c.dataset.i]).filter(Boolean);
-  if(!picked.length){ msg.textContent = "nothing selected"; return; }
-  msg.textContent = "adding…";
-  // Only relations whose both ends are being added. Promote half a resolution and
-  // you get the half you asked for, not a dangling edge.
-  const st = promoteRows.get(toolId);
-  const ids = new Set(picked.map(r=>r.id));
+  const say = text => { st.msg = text; if(msg) msg.textContent = text; };
+  const {rows, offered} = promoteView(st);
+  const picked = linksOnly ? []
+    : all ? offered.slice() : offered.filter(r=>promoteChecked(st, r));
+  if(!picked.length && !linksOnly){ say("nothing selected"); return; }
+  say("adding…");
+  // An edge may land when both its ends will be on the map — the ones being
+  // added now, plus the ones already there. Requiring both ends to be *new* is
+  // why dig's resolutions never linked: it reports `domain resolves_to host`,
+  // and the domain is on the map already by the time you resolve it, so every
+  // edge was discarded and the hosts arrived orphaned. Rows you unticked are
+  // still excluded — those nodes will not exist, and the server drops any edge
+  // whose ends it cannot find.
+  const ids = new Set([...picked.map(r=>r.id),
+                       ...rows.filter(r=>r.known).map(r=>r.id)]);
   const keptEdges = (st.edges||[]).filter(e=>ids.has(e.frm) && ids.has(e.to));
   const d = await (await fetch(`/projects/${proj.id}/map`,{method:"POST",
     headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({run: st.run, rows: picked, edges: keptEdges})})).json();
+    body:JSON.stringify({run: st.run, rows: picked, edges: keptEdges,
+                         parent: st.parent || ""})})).json();
+  // Rows the rules flagged are still worth reporting — you should know you just
+  // widened the engagement — but they are in scope now, not "outside" it.
   const oos = picked.filter(r=>!r.in_scope).length;
-  msg.textContent = `added ${d.added} to the map`
-    + (d.linked ? ` · ${d.linked} links` : "")
-    + (oos ? ` · ${oos} outside scope` : "");
-  box.querySelectorAll(".promoterows").forEach(e=>e.remove());
+  const said = [];
+  if(picked.length) said.push(`added ${d.added} to the map`);
+  if(d.linked)      said.push(`${d.linked} link${d.linked===1?"":"s"}`);
+  if(oos)           said.push(`${oos} brought into scope`);
+  say(said.join(" · ") || "nothing to add");
+  // No "done" state to freeze: the box re-reads the map, so what it shows after
+  // this is simply what is true — the rows are known now, and if you delete one
+  // it is offered again without re-running anything.
   loadMap();
 }
 
@@ -1118,100 +1752,695 @@ async function loadMap(){
   try{
     mapData = await (await fetch(`/projects/${proj.id}/map`)).json();
   }catch(e){ mapData = {nodes:{}, edges:{}}; }
-  mapCount = Object.values(mapData.nodes||{}).filter(n=>!n.dismissed).length;
+  mapCount = Object.values(mapData.nodes||{}).length;
   render();
 }
 
 function renderMap(card){
   const el = document.getElementById("v-map");
   const nodes = Object.values(mapData.nodes||{});
-  const shown = nodes.filter(n=>showDismissed || !n.dismissed);
+  // Everything on the map is shown. There is no hidden state: a node you removed
+  // is gone, not filtered out of the view while still counting as known.
+  const shown = nodes;
   const edges = Object.values(mapData.edges||{});
 
-  const scopeN = shown.filter(n=>n.kind==="domain" &&
-                                (n.tags||[]).includes("scope")).length;
+  // In scope is the server's answer, not a guess from the scope text: the rules
+  // plus everything you promoted. Counting the "scope" tag instead reported "1
+  // in scope" next to eight subdomains you had just accepted.
+  const inScopeN = shown.filter(n=>n.kind==="domain" && n.in_scope !== false).length;
+  const oosN     = shown.filter(n=>n.in_scope === false).length;
   const foundN = shown.filter(n=>n.kind==="domain" &&
                                 !(n.tags||[]).includes("scope")).length;
-  const counts = [`<span class="gcount"><b>${scopeN}</b> in scope</span>`,
+  const counts = [`<span class="gcount"><b>${inScopeN}</b> in scope</span>`,
+                  oosN ? `<span class="gcount exitN"><b>${oosN}</b> out of scope</span>` : "",
                   `<span class="gcount"><b>${foundN}</b> subdomains found</span>`]
     .concat(KIND_ORDER.filter(k=>k!=="domain").map(k=>{
       const n = shown.filter(x=>x.kind===k).length;
       return `<span class="gcount"><b>${n}</b> ${KIND_LABEL[k].toLowerCase()}</span>`;
     })).join("");
 
-  const outs = new Map();
-  edges.forEach(e=>{ if(!outs.has(e.frm)) outs.set(e.frm,[]); outs.get(e.frm).push(e); });
+  const outs = new Map(), ins = new Map();
+  edges.forEach(e=>{
+    if(!outs.has(e.frm)) outs.set(e.frm,[]);
+    outs.get(e.frm).push(e);
+    if(!ins.has(e.to)) ins.set(e.to,[]);
+    ins.get(e.to).push(e);
+  });
 
   const isScope = n => (n.tags||[]).includes("scope");
-  const groupDefs = [
-    ["Scope",     n=>n.kind==="domain" && isScope(n)],
-    ["Subdomains found", n=>n.kind==="domain" && !isScope(n)],
-    ...KIND_ORDER.filter(k=>k!=="domain").map(k=>[KIND_LABEL[k], n=>n.kind===k]),
-  ];
+  const nodeAt = v => shown.find(n=>n.kind==="domain" && n.value === v);
 
-  const groups = groupDefs.map(([label, pred])=>{
-    const mine = shown.filter(pred);
-    if(!mine.length) return "";
-    return `<div class="mapgroup"><div class="mapkind">${label}
-        <span class="sub">${mine.length}</span></div>
-      ${mine.map(n=>{
-        const links = (outs.get(n.id)||[]).length;
-        const conflict = Object.values(n.attrs||{}).some(v=>
-          new Set(v.map(x=>x.value)).size>1);
-        return `<div class="mapnode ${n.dismissed?'dim':''}"
-             onclick="showNode('${esc(n.id)}')">
-          <code>${esc(n.value)}</code>
-          ${(n.tags||[]).includes("scope") ? '<span class="pill">scope</span>':''}
-          ${links?`<span class="sub">${links} links</span>`:''}
-          ${conflict?'<span class="exitN sub">conflict</span>':''}
-        </div>`;}).join("")}</div>`;
-  }).join("");
+  // Which wildcard each name sits under, read from the `contains` edges written
+  // at promote time. Drawing them nested is the whole point of keeping those
+  // names: thirteen rows that are one host read as thirteen findings in a flat
+  // list, and as one host with thirteen names in a tree.
+  const wildParent = new Map(), wildKids = new Map();
+  edges.forEach(e=>{
+    if(e.rel !== "contains") return;
+    const p = (mapData.nodes||{})[e.frm];
+    if(!p || !(p.tags||[]).includes("wildcard")) return;
+    wildParent.set(e.to, e.frm);
+    if(!wildKids.has(e.frm)) wildKids.set(e.frm, []);
+    wildKids.get(e.frm).push(e.to);
+  });
 
-  const mapTop = `
-    <h2 style="display:flex;justify-content:space-between;align-items:baseline">
-      <span>Map</span>
-      <span class="sub">${shown.length} nodes · ${edges.length} links</span></h2>
-    <div class="card" style="padding:12px;margin-bottom:6px">
-      <div class="sub" style="margin-bottom:8px">
-        ${proj && proj.scope ? `scope <code>${esc(proj.scope)}</code>`
-          : `<span class="exitN">no scope set</span> —
-             <a style="color:var(--accent);cursor:pointer"
-                onclick="setView('project')">add it under Project</a>`}
-      </div>
-      <div>${counts}</div>
-      <div id="nodedetail"></div>
-      ${nodes.length ? groups : `<div class="sub" style="margin-top:10px">
-        Nothing found yet. Run something below and promote its output.</div>`}
+  // What a scan found out about this node, in one line: who reported it, what it
+  // resolved to, what has been checked against it. A list of bare names says
+  // nothing about progress — this is the difference between "8 subdomains" and
+  // "8 subdomains, none of them resolved yet".
+  const discovered = n => {
+    const bits = [];
+    const rel = r => (outs.get(n.id)||[]).filter(e=>e.rel===r)
+      .map(e=>(mapData.nodes[e.to]||{}).value).filter(Boolean);
+    const ips = rel("resolves_to"), ports = rel("has_port"), serves = rel("serves");
+    // The other direction, which is the useful one on an address: an IP on its
+    // own tells you nothing, and the names pointing at it are what you are
+    // about to scan — nine of them on one address is one machine, and that is
+    // the fact worth seeing without opening anything.
+    const from = (ins.get(n.id)||[]).filter(e=>e.rel === "resolves_to")
+      .map(e=>((mapData.nodes||{})[e.frm]||{}).value).filter(Boolean);
+    // Which tool reported it is not on the row. It was on every single one,
+    // pushing a second line under each name to say something you can read in
+    // the detail pane when it matters — and what a name resolved to is the
+    // thing you are actually scanning down this list for.
+    if(ips.length)    bits.push("→ " + ips.map(esc).join(", "));
+    if(from.length)   bits.push("← " + [...new Set(from)].map(esc).join(", "));
+    if(ports.length)  bits.push(ports.length + (ports.length===1?" port":" ports"));
+    if(serves.length) bits.push(serves.length + " web app" + (serves.length===1?"":"s"));
+    const checks = Object.keys(n.checks||{});
+    if(checks.length) bits.push("checked: " + checks.map(esc).join(", "));
+    if(n.note)        bits.push("note: " + esc(n.note));
+    return bits.length ? `<div class="sub" style="margin:2px 0 0 2px">${
+      bits.join(" · ")}</div>` : "";
+  };
+
+  // A row opens the node, unless the panel it is in is picking — then the whole
+  // row toggles instead. One behaviour at a time: a permanent tick on every row
+  // is clutter you scroll past on every visit for something you do rarely.
+  // `hideScope` for rows that live inside an In scope / Out of scope panel: the
+  // heading above them already says it, on every single row.
+  const row = (n, pill, picking, hideScope) => {
+    const conflict = Object.values(n.attrs||{}).some(v=>
+      new Set(v.map(x=>x.value)).size>1);
+    const on = picked.has(n.id);
+    // One box per node, and the whole box is the target — the resolution line
+    // underneath is part of what you are clicking on, not a caption beside it.
+    // The open one stays lit, so with the detail panel filled you can still see
+    // which of thirteen names it is describing.
+    return `<div class="mapitem${picking && on ? " picked" : ""}${
+         !picking && openNode === n.id ? " open" : ""}"
+         onclick="${picking ? `pickNode('${esc(n.id)}')` : `showNode('${esc(n.id)}')`}">
+      <div class="mapnode">
+      ${picking ? `<input type="checkbox" ${on?"checked":""} tabindex="-1"
+             onclick="event.stopPropagation();pickNode('${esc(n.id)}')">` : ""}
+      <code>${esc(n.value)}</code>
+      ${pill||""}
+      ${(n.tags||[]).includes("wildcard")
+        ? '<span class="pill" title="Answers for any name under it">wildcard</span>':''}
+      ${(n.tags||[]).includes("under-wildcard")
+        ? `<span class="sub" title="DNS answers for any name here, so it cannot
+             confirm this one — kept because a source published it, and scanned
+             as one host">not scanned · under a wildcard</span>`:''}
+      ${n.third_party
+        ? `<span class="exitN sub" title="A scan identified this as someone
+             else's infrastructure, so scope is not inherited into it">${
+             esc(thirdPartyWho(n) || "third-party")}</span>`:''}
+      ${!hideScope && n.in_scope === false
+        ? '<span class="exitN sub">out of scope</span>':''}
+      ${conflict?'<span class="exitN sub">conflict</span>':''}
+      </div>${discovered(n)}
     </div>`;
+  };
+
+  // No scope line here. The rules are on the panel to the right, the roots
+  // themselves are under In scope → Domains, and the counts above already say
+  // how the split came out — printing the scope text over the top of all three
+  // was the same fact a fourth time.
+  const rules = (proj && proj.scope_all) || [];
+
+  // Scope first, kind second. Which side of the line something is on decides
+  // whether you may touch it at all, so it is the question the map should answer
+  // before "is it a name or an address" — and it is the split you act on, with
+  // one move control per side rather than one per kind.
+  const inScope  = shown.filter(n=>n.in_scope !== false);
+  const outScope = shown.filter(n=>n.in_scope === false);
+  const isRoot = n => isScope(n) || rules.includes(n.value);
+  const KINDS = [
+    ["Hosts",      n=>n.kind === "host"],
+    ["Domains",    n=>n.kind === "domain" && isRoot(n)],
+    ["Subdomains", n=>n.kind === "domain" && !isRoot(n)],
+    ["Ports",      n=>n.kind === "port"],
+    ["Web apps",   n=>n.kind === "webapp"],
+    ["Findings",   n=>n.kind === "finding"],
+  ];
+  // The three that are always on screen. The rest appear once a scan produces
+  // them — an empty Findings box on every engagement is furniture.
+  const ALWAYS = ["Hosts", "Domains", "Subdomains"];
+  // Decided once, for both sides together: the panels share grid rows so that
+  // Hosts sits opposite Hosts however lopsided the two lists are, and that only
+  // works if both draw the same boxes in the same order.
+  const kindsShown = KINDS.filter(([kl, pred]) =>
+    ALWAYS.includes(kl) || shown.some(pred));
+  // Side by side, and both always present. An empty half is information — "no
+  // affiliate infrastructure came back" and "nothing is in scope yet" are
+  // things you want to read, and a panel that disappears when it is empty
+  // leaves you wondering whether it was ever computed.
+  // A wildcard's names drawn under it, one level deep. Children that ended up on
+  // the other side of the scope split are not duplicated here — the parent gets
+  // a stub saying how many, because showing the same name in both panels would
+  // make the counts lie.
+  const nested = (list, picking) => {
+    const here = new Set(list.map(n=>n.id));
+    const kids = new Map(), top = [];
+    list.forEach(n=>{
+      const p = wildParent.get(n.id);
+      if(p && here.has(p)){
+        if(!kids.has(p)) kids.set(p, []);
+        kids.get(p).push(n);
+      } else top.push(n);
+    });
+    return top.map(n=>{
+      const mine = kids.get(n.id) || [];
+      const away = (wildKids.get(n.id) || []).filter(id=>!here.has(id)).length;
+      const ids = mine.map(k=>k.id);
+      const all = ids.length && ids.every(i=>picked.has(i));
+      return row(n, "", picking, true)
+        + (picking && ids.length ? `<div class="kidstub">
+             <span class="act" onclick="pickMany(${esc(JSON.stringify(ids))},${!all})"
+               >${all ? "clear" : "select"} the ${ids.length} under this</span></div>` : "")
+        + (mine.length ? `<div class="mapkids">${
+             mine.map(k=>row(k, "", picking, true)).join("")}</div>` : "")
+        + (away ? `<div class="kidstub">${away} more under this, on the other
+             side of the split</div>` : "");
+    }).join("");
+  };
+
+  // `side` says which panel this is — "subdomains:out", "hosts:in" — because
+  // both sections have an in and an out, and keying on the direction alone put
+  // the Hosts panels into picking mode alongside the Subdomains ones.
+  //
+  // Where they are now is also what the move must be: picking in the
+  // out-of-scope panel means bringing them in, and vice versa.
+  const panel = (label, mine, cls, side) => {
+    const ids = mine.map(n=>n.id);
+    const picking = moveFrom === side;
+    const all = ids.length && ids.every(i=>picked.has(i));
+    const to = side.endsWith("out") ? "in" : "out";
+    // Right-aligned, opposite the label, and no total — the kind boxes below
+    // each carry their own count, and this one only restated their sum.
+    //
+    // The same link opens and closes it: pressing "move" again is the obvious
+    // way out, and a Cancel button beside the confirm is in the wrong half of
+    // the panel to be found.
+    // In scope is what you are authorised to touch; scannable is what actually
+    // gets handed to a scanner. They differ — names under a wildcard are one
+    // host — and one label for both is how you end up sure a host was tested.
+    const held = side.endsWith("in")
+      ? mine.filter(n=>(n.tags||[]).includes("under-wildcard")).length : 0;
+    const head = `<span class="sub">
+      ${held ? `<span title="They all answer with the same address, so the
+           scanners get the wildcard once instead of each name"
+           >${held} not scanned</span> · ` : ""}
+      ${mine.length ? `<span class="act" onclick="toggleMove('${side}')">${
+          picking ? "done" : "move"}</span>` : ""}
+      ${picking ? ` · <b>${picked.size}</b> selected ·
+        <span class="act" onclick="pickMany(${esc(JSON.stringify(ids))},${!all})"
+          >${all ? "none" : "all"}</span>` : ""}</span>`;
+    // Every child is a grid row, and the action bar is one of them whether or
+    // not this side is picking — a row that exists on one side only would shunt
+    // that side's boxes down by the height of a button.
+    return `
+    <div class="mappanel${picking ? " picking" : ""}">
+      <div class="mapband ${cls||""}">${label}${head}</div>
+      <div class="movebar">${picking ? `<div class="fields">
+          <button ${picked.size?"":"disabled"} onclick="confirmMove()">Move to ${
+            to === "in" ? "in scope" : "out of scope"}</button>
+          <button class="ghost" onclick="cancelMove()">Cancel</button>
+        </div>` : ""}</div>
+      ${kindsShown.map(([kl, pred])=>{
+          const list = mine.filter(pred);
+          // An empty box is an answer — "nothing of ours is in scope yet", "no
+          // third-party addresses came back" — and it keeps the two sides
+          // readable against each other.
+          return `<div class="kindbox">
+            <div class="mapkindsub">${kl}<span class="sub">${list.length}</span></div>
+            ${list.length ? nested(list, picking)
+                          : `<div class="sub" style="padding:2px">n/a</div>`}
+          </div>`;
+        }).join("")}
+    </div>`;
+  };
+
+  // A rule written without a star covers that host and nothing else, so what a
+  // scan finds underneath is out of scope — correct by the letter of it, and
+  // also the single likeliest thing to be an oversight rather than a decision.
+  // Say which rule is doing it, and make widening one click instead of a trip
+  // to the Project page to guess at syntax.
+  const rawRules = ((proj && proj.scope) || "").split(/[,\s;]+/)
+    .map(s=>s.trim().toLowerCase().replace(/\.$/, "")).filter(Boolean);
+  const apexOnly = rawRules.filter(r=>!r.startsWith("*.") && !r.includes("/"));
+  const widen = [...new Set(outScope
+    .map(n=>apexOnly.find(r=>n.value.endsWith("." + r)))
+    .filter(Boolean))];
+  // A rule that cannot match anything fails silently — the map just shows less
+  // than you expected, which reads as "the scan found little" rather than "the
+  // scope has a typo in it".
+  const badRules = ((proj && proj.scope_problems) || []);
+  const scopeProblems = !badRules.length ? "" : `
+    <div class="sub" style="padding:4px 2px">
+      <span class="exitN">scope</span> ${badRules.map(p=>
+        `<code>${esc(p.rule)}</code> — ${esc(p.why)}`).join(" · ")}
+      · <a class="act" onclick="setView('project')">fix it</a>
+    </div>`;
+
+  const widenHint = !widen.length ? "" : `
+    <div class="sub" style="padding:4px 2px">
+      ${widen.map(r=>`<code>${esc(r)}</code>`).join(", ")}
+      ${widen.length===1?"is":"are"} scoped as the apex only — subdomains are not
+      included unless you write the star.
+      ${widen.map(r=>`<span style="cursor:pointer;color:var(--accent)"
+         onclick="widenScope('${esc(r)}')">scope *.${esc(r)}</span>`).join(" · ")}
+    </div>`;
+
+  // Heading + action bar + one row per kind. Naming the rows on the container
+  // lets both panels sit on the same lines, so Hosts is opposite Hosts however
+  // lopsided the two sides are.
+  const groups = `<div class="scopegrid"
+         style="grid-template-rows:repeat(${kindsShown.length + 2}, auto)">
+         ${panel("In scope", inScope, "", "scope:in")}
+         ${panel("Out of scope", outScope, "oos", "scope:out")}
+       </div>${scopeProblems}${scopeNote ? `<div class="sub" style="padding:4px 2px">${
+           esc(scopeNote)}</div>` : ""}${widenHint}`
+    + (shown.length ? "" : `<div class="sub" style="padding:6px 2px 0">
+         nothing found yet — start reconnaissance below</div>`);
+
+  // Built below, then dropped into the right-hand column: the baseline is what
+  // you work with while reading the map, so it sits beside it rather than under
+  // it. Clicking a node borrows the column; closing gives it back.
+  let toolset = "", installBar = "";
+  // No scope line above the map: the scope is a section *of* the map now, with
+  // its own rows, and printing the raw scope text over the top said the same
+  // thing twice. The sections carry their own empty states, so they render
+  // whether or not anything has been found — the old "nothing found yet"
+  // placeholder replaced the whole map, scope included.
 
   // The toolset, grouped by phase. This is where you work; the map above is
   // what it fills in.
   const baseline = [...tools.values()].filter(t=>t.baseline)
     .sort((a,b)=>(a.baseline_order||0)-(b.baseline_order||0));
-  const installBar = baseline.length ? "" : `
+  installBar = baseline.length ? "" : `
     <div class="card" style="padding:12px;margin-bottom:12px">
       <div class="sub" style="margin-bottom:8px">
         The baseline toolset for an external engagement isn't installed yet —
-        bbot for discovery, then dig, nmap, curl and openssl. Their output is
-        what fills in the map.</div>
+        bbot and subfinder for discovery, then dig, nmap, curl and openssl.
+        Their output is what fills in the map.</div>
       <button onclick="installBaseline()">Install baseline</button>
       <span class="sub" id="basemsg"></span>
     </div>`;
 
-  // Flat and in workflow order: bbot discovers, dig resolves, nmap scans, curl
-  // and openssl fill in detail. The order is the methodology.
-  const toolset = baseline.length
-    ? `<div class="secthead">Baseline<span class="sub">${baseline.length}</span></div>`
-      + baseline.map(t=>card(t,"run","")).join("")
-    : "";
+  // The baseline, grouped by the phase each tool belongs to, in engagement
+  // order — reconnaissance, then active scanning, then web analysis. The order
+  // was always the methodology; a flat list of six just made you remember it.
+  //
+  // These are headings inside the Baseline block, not sidebar entries. The
+  // sidebar navigates phases you put your own tools in; this names the stage of
+  // the same list you are already looking at.
+  // The checklist is always on screen and the working area shows one phase, so
+  // you can see the whole engagement and still only deal with a step at a time.
+  // A tool whose section the engagement type no longer lists still has to
+  // appear, rather than dropping off the page because its phase was renamed.
+  const phased = new Set(SECTIONS.map(([k])=>k));
+  const orphans = baseline.filter(t=>!phased.has(t.section));
+  const steps = SECTIONS.filter(([k])=>phaseTools(k).length)
+    .concat(orphans.length ? [["other", "Other"]] : [])
+    .map(([key, label])=>[key, label, phaseState(key)]);
 
-  el.innerHTML = mapTop + installBar + toolset;
+  // Where the working area points: your last click if it is still a step,
+  // otherwise whatever is running, otherwise the first thing left to do.
+  const current = (stepAt && steps.some(([k])=>k === stepAt)) ? stepAt
+    : (steps.find(([,,s])=>s.state === "running")
+       || steps.find(([,,s])=>["ready","stale"].includes(s.state))
+       || steps[steps.length-1] || [""])[0];
 
+  toolset = !baseline.length ? "" :
+    `<div class="secthead" style="margin-top:0">Baseline
+       <span class="sub">${baseline.length} tools</span></div>
+     <div class="steplist">
+       ${steps.map(([key, label, s])=>`
+         <div class="steprow ${s.state}${key === current ? " on" : ""}"
+              onclick="goStep('${key}')">
+           <span class="stepmark">${STEP_MARK[s.state] || "☐"}</span>
+           <span class="stepname">${esc(label)}</span>
+           <span class="sub">${esc(s.note)}</span>
+         </div>`).join("")}
+     </div>
+     ${current ? phaseWork(current) : ""}`;
+
+  el.innerHTML = `
+    <h2 style="display:flex;justify-content:space-between;align-items:baseline">
+      <span>Map</span>
+      <span class="sub">${shown.length} nodes · ${edges.length} links</span></h2>
+    <div class="mapwrap withdetail">
+      <div class="card" style="padding:12px">
+        <div>${counts}</div>
+        ${groups}
+      </div>
+      <div class="mapdetail">${openNode && mapData.nodes[openNode]
+        ? nodeDetail(openNode)
+        : `<div class="card" style="padding:14px">${installBar}${toolset}</div>`}</div>
+    </div>`;
 }
 
-function showNode(id){
+// The phase the sequence belongs to — wherever the discovery tools are filed,
+// so this follows the engagement type rather than assuming "reconnaissance".
+const reconPhase = () => (reconDiscovery()[0] || {}).section || "";
+
+// Whether the baseline's tool cards are on screen. A run opens the list on its
+// own — output arriving behind a collapsed button is output you cannot read.
+// Which phases have their tool cards on screen. Per phase, not one switch for
+// the lot: opening Web Analysis to read a curl run should not unroll every
+// card in the baseline.
+const openTools = new Set();
+function toggleTools(key){
+  openTools.has(key) ? openTools.delete(key) : openTools.add(key);
+  render();
+}
+
+const phaseTools = key => [...tools.values()]
+  .filter(t=>t.baseline && t.section === key)
+  .sort((a,b)=>(a.baseline_order||0)-(b.baseline_order||0));
+
+// Which phase the working area is showing. Null means "the first one that is
+// not finished", so the panel follows the engagement without being told.
+let stepAt = null;
+
+// What a phase can be told about itself, worked out from the map and from the
+// runs recorded for this engagement — never from anything the browser is
+// holding, so a refresh puts you back where you actually were.
+//
+//   blocked  its tools are not installed or not built
+//   running  a run of this phase is in flight now
+//   ready    it has input and has never been run
+//   stale    it ran, but the map has grown since
+//   done     it ran and nothing has changed under it
+//   empty    installed and runnable, but there is nothing to point it at
+function phaseState(key){
+  const mine = phaseTools(key);
+  if(!mine.length) return {state:"blocked", note:"nothing installed for this phase"};
+  const broken = mine.filter(t=>t.status !== "ready");
+  if(broken.length === mine.length)
+    return {state:"blocked",
+            note:`${broken.map(t=>t.id).join(", ")} ${broken.length===1?"is":"are"} not built`};
+  if(recon && recon.phase === key && recon.step !== "done")
+    return {state:"running", note:recon.msg || "running"};
+
+  const ready = mine.filter(t=>t.status === "ready");
+  // Everything past reconnaissance eats the map, so "nothing to point it at"
+  // is a real answer there and not a failure. Discovery is the exception: bbot
+  // and subfinder start from the engagement's scope, so a phase holding one of
+  // them is runnable on an empty map — which is the state every engagement
+  // starts in, and the one where you most need the button to work.
+  const feed = ready.filter(t=>(t.consumes||[]).length);
+  const selfStarting = ready.length > feed.length;
+  const targets = (!selfStarting && feed.length)
+    ? Math.max(...feed.map(t=>mapInput(t.id).vals.length)) : null;
+  const runsHere = ready.map(t=>lastRunAt(t.id)).filter(Boolean);
+  const last = runsHere.length ? Math.max(...runsHere) : 0;
+
+  if(!last){
+    if(targets === 0) return {state:"empty", note:"nothing in scope to run against"};
+    return {state:"ready",
+            note:targets == null ? `${ready.map(t=>t.id).join(", ")} ready`
+                                 : `${targets} target${targets===1?"":"s"} in scope`};
+  }
+  // Grown since it ran? Then what it reported no longer covers the map.
+  const newer = Object.values(mapData.nodes||{})
+    .filter(n=>(n.first_seen||0) > last).length;
+  if(newer) return {state:"stale", note:`${newer} new since it ran`};
+  return {state:"done", note:phaseProduced(key)};
+}
+
+// When this phase's tools last finished, as a timestamp. Read from the runs the
+// server recorded, which is why the checklist survives a reload.
+const lastRunAt = id => (runHistory.get(id) || 0);
+const runHistory = new Map();     // tool id -> finished_at of its newest run
+
+// A one-line account of what a finished phase put on the map, for the row.
+function phaseProduced(key){
+  const checks = new Set(phaseTools(key).map(t=>t.check).filter(Boolean));
+  const nodes = Object.values(mapData.nodes||{});
+  const covered = nodes.filter(n=>Object.keys(n.checks||{})
+    .some(c=>checks.has(c))).length;
+  return covered ? `${covered} node${covered===1?"":"s"} covered` : "finished";
+}
+
+const STEP_MARK = {done:"✓", running:"▸", ready:"☐", stale:"↻",
+                   blocked:"✗", empty:"⊘"};
+
+function goStep(key){ stepAt = key; render(); }
+
+// The working area: one phase, with the one action it offers and its tools a
+// click away. Everything else about the engagement is in the checklist above.
+function phaseWork(key){
+  const label = (SECTIONS.find(([k])=>k === key) || [, "Other"])[1];
+  const mine = phaseTools(key);
+  const {state, note} = phaseState(key);
+  const open = openTools.has(key);
+  const runnable = !["blocked", "empty", "running"].includes(state);
+  return `
+    <div class="subhead">
+      <span>${esc(label)}</span>
+      ${state === "running"
+        ? `<span class="sub"><span class="running">running</span></span>`
+        : `<button class="mini" ${runnable ? "" : "disabled"}
+             onclick="startPhase('${key}')">${
+             state === "done" || state === "stale" ? "Run again" : "Run"}</button>`}
+      <button class="mini ghost toolsbtn" onclick="toggleTools('${key}')">
+        <span class="fold">${open ? "▾" : "▸"}</span> Tools
+        <span class="sub">${mine.length}</span></button>
+    </div>
+    <div class="sub">${esc(note)}${state === "blocked"
+      ? ` — <a class="act" onclick="setView('add')">Add Tool</a>` : ""}</div>
+    ${recon && recon.phase === key ? reconPanel() : ""}
+    ${open ? mine.map(t=>card(t,"run","",true)).join("") : ""}`;
+}
+
+// The tools this run has involved so far: the discovery pair, and the resolver
+// once it has started. Listing the resolver before it runs would show an empty
+// pane for a step that has not begun.
+function reconTools(){
+  const list = reconDiscovery();
+  const r = recon && recon.resolver && tools.get(recon.resolver);
+  return r ? list.concat([r]) : list;
+}
+
+// One tool: its stream, and what it has found. While it runs the right column
+// is read from the stream itself; once the sequence has mapped it, the column
+// switches to what actually landed on the map, which is the authoritative
+// answer and is usually shorter — a tool mentions far more than it finds.
+function reconStream(t){
+  const r = runs.get(t.id) || {};
+  const mapped = recon && recon.mapped && recon.mapped[t.id];
+  const found = mapped || [...(reconSeen.get(t.id) || [])];
+  const resolver = t.check === "resolve";
+  const state = r.busy ? `<span class="running">running</span>`
+    : r.error ? `<span class="err">${esc(r.error)}</span>`
+    : r.code !== undefined
+      ? `<span class="${r.code===0?'exit0':'exitN'}">exit ${r.code}</span>` : "";
+  return `
+    <div class="lbl" style="margin-top:12px"><span>${esc(t.id)}</span>${state}</div>
+    <div class="split" style="margin-top:4px">
+      <pre class="term" id="rrun-${t.id}"
+           style="max-height:220px;overflow:auto">${ansiToHtml(clip(runout.get(t.id)))}</pre>
+      <div>
+        <div class="lbl"><span>${resolver ? "resolved" : "discovered"}</span>
+          <span class="sub" id="rcount-${t.id}">${found.length}${
+            mapped ? " on the map" : ""}</span></div>
+        <pre class="term" id="rfound-${t.id}"
+             style="max-height:196px;overflow:auto">${found.map(esc).join("\n")}</pre>
+      </div>
+    </div>
+    ${runFiles(t, r)}`;
+}
+
+// Repaint one tool's stream in place: run_log fires per line, and a full render
+// on every line of a bbot scan would rebuild the page under the scrollbar.
+function paintRecon(id){
+  const out = document.getElementById("rrun-"+id);
+  if(out) stickToBottom(out, ansiToHtml(clip(runout.get(id))));
+  // Once the sequence has mapped a tool, its column is the authoritative list
+  // and the live one must not overwrite it.
+  if(recon && recon.mapped && recon.mapped[id]) return;
+  const found = [...(reconSeen.get(id) || [])];
+  const col = document.getElementById("rfound-"+id);
+  if(col) col.textContent = found.join("\n");
+  const n = document.getElementById("rcount-"+id);
+  if(n) n.textContent = String(found.length);
+}
+
+// One panel, four states: ready, discovering, reviewing, resolving/done. It
+// stays on screen after it finishes so you can read what it did.
+function reconPanel(){
+  const disco = reconDiscovery();
+  if(!disco.length) return "";
+  const names = disco.map(t=>t.id).join(" + ");
+  const box = inner => `<div class="card" style="padding:12px;margin-bottom:10px">
+    ${inner}</div>`;
+
+  // Only while a run is on. Start and Tools live on the phase's own row now, so
+  // an idle panel would be an empty box under every heading.
+  if(!recon) return "";
+
+  const step = (n, label, state) =>
+    `<span class="sub" style="margin-right:14px${state==="now"?";color:var(--accent);font-weight:600":""}">
+       ${state==="done" ? "✓" : n+"."} ${label}</span>`;
+  const at = recon.step;
+  const bar = `<div style="margin-bottom:8px">
+      ${step(1, "discover", at==="discovery" ? "now" : "done")}
+      ${step(2, "map",      at==="mapping" ? "now" : (at==="discovery" ? "" : "done"))}
+      ${step(3, "resolve",  at==="resolve" ? "now" : (at==="done" ? "done" : ""))}
+    </div>`;
+
+  // Every tool the sequence has touched, each with its own stream on the left
+  // and what it has turned up on the right. The output tells you it is alive;
+  // the column beside it tells you whether it is finding anything, which is a
+  // different question and the one you actually care about.
+  const streams = reconTools().map(t=>reconStream(t)).join("");
+  const status =
+    at === "discovery" ? `<span class="running">running</span> ${
+        esc([...recon.pending].join(", ") || "finishing")}`
+    : at === "mapping" ? esc(recon.msg || "putting what they found on the map…")
+    : at === "resolve" ? `<span class="running">resolving</span> with ${
+        esc(recon.resolver||"")} — addresses land under the domains they belong to`
+    : esc(recon.msg || "done");
+
+  return box(bar + `
+    ${recon.note ? `<div class="sub">${esc(recon.note)}</div>` : ""}
+    <div class="sub">${status}</div>
+    ${(recon.unresolved||[]).length ? `<div class="sub" style="margin-top:4px">
+        <span class="exitN">no DNS answer</span> for
+        <code>${recon.unresolved.slice(0,6).map(esc).join(", ")}</code>${
+          recon.unresolved.length>6 ? ` +${recon.unresolved.length-6} more` : ""}
+        — they exist in a certificate or a public source but do not resolve
+        publicly, so nothing can be scanned at them</div>` : ""}
+    ${recon.msg && at === "discovery" ? `<div class="sub err">${esc(recon.msg)}</div>` : ""}
+    <div id="reconstreams">${streams}</div>
+    <div class="fields" style="margin-top:8px">
+      ${at === "done" ? `<button onclick="startRecon()">Run again</button>` : ""}
+      <button class="ghost" onclick="cancelRecon()">${at==="done"?"Clear":"Cancel"}</button>
+    </div>`);
+}
+
+// What a relation is called when you are standing at either end of it. A node
+// id is not an answer: "→ resolves_to host:216.198.79.1" is the map's internal
+// spelling of "resolves to 216.198.79.1", and only one of those reads.
+const REL_OUT = {resolves_to:"resolves to", has_port:"open port",
+                 serves:"serves", contains:"contains", affects:"affects"};
+const REL_IN  = {resolves_to:"resolved from", has_port:"port on",
+                 serves:"served by", contains:"part of", affects:"affecting"};
+
+// Both directions matter. Opening a subdomain should say which addresses it
+// lands on; opening an address should say which subdomains land on it, which is
+// how you notice that nine names are one machine — and one machine is one
+// nmap run, not nine.
+function relRows(edges, dict, other){
+  const by = new Map();
+  edges.forEach(e=>{
+    const label = dict[e.rel] || e.rel;
+    if(!by.has(label)) by.set(label, []);
+    by.get(label).push(other(e));
+  });
+  const chip = nid => {
+    const target = (mapData.nodes||{})[nid];
+    return `<code style="cursor:pointer;color:var(--accent)"
+       onclick="showNode('${esc(nid)}')">${esc(target ? target.value : nid)}</code>`;
+  };
+  return [...by].map(([label, ids])=>`<div class="sub" style="margin-top:4px">
+      <b>${esc(label)}</b> ${[...new Set(ids)].map(chip).join(" · ")}</div>`).join("");
+}
+
+// Which node the detail column is showing. Held in state rather than written
+// straight into the DOM, because the layout depends on it: with nothing open
+// the map uses the full width, and opening a node splits it in two.
+let openNode = null;
+// Clicking the row you already have open closes the panel — the same click
+// that opened it should put it away, without hunting for the close link.
+function showNode(id){ openNode = (openNode === id) ? null : id; render(); }
+// For the times something else decides what you should be looking at, where a
+// toggle would be wrong: changing a node's scope must not close the pane you
+// changed it from.
+function focusNode(id){ openNode = id; render(); }
+function closeNode(){ openNode = null; render(); }
+
+// Notes survive a re-render. The pane used to be painted only when you clicked
+// it, so typing was safe; it repaints on every event now, and a scan finishing
+// mid-sentence would take the sentence with it.
+const noteDrafts = new Map();
+
+// Tools you can point at one thing, filtered to the kinds they accept. This is
+// the single-target counterpart of `consumes`: curl and openssl declare
+// targets:["domain","host"], so they appear on a host and not on a finding.
+// Whose infrastructure a scan said this is, when it named a provider.
+const PROVIDERS = ["amazon","aws","azure","google","cloudflare","akamai",
+                   "fastly","vercel","netlify","heroku","digitalocean"];
+const thirdPartyWho = n => (n.tags||[]).find(t=>PROVIDERS.includes(t)) || "";
+
+const nodeToolsFor = kind => [...tools.values()]
+  .filter(t=>t.status === "ready" && (t.targets||[]).includes(kind))
+  .sort((a,b)=>(a.baseline_order||0)-(b.baseline_order||0));
+
+// The command that tool would run against that node. A webapp's value is a
+// whole URL, so a template that already writes the scheme — curl's
+// `https://{{target}}` — gets the value without one rather than https://https://.
+function nodeCommand(t, n){
+  const tmpl = (t.command_override||"").trim() || t.run_template || "";
+  if(!tmpl) return "";
+  const bare = /:\/\/\s*\{\{target\}\}/.test(tmpl)
+    ? n.value.replace(/^[a-z]+:\/\//i, "") : n.value;
+  return tmpl.replaceAll("{{target}}", bare)
+             .replaceAll("{{targets}}", bare)
+             .replaceAll("{{scope}}", bare);
+}
+
+// Which node a tool's current run was launched from, so what it finds can be
+// hung off that node instead of floating loose on the map.
+const nodeRunOf = new Map();      // tool id -> node id
+
+// The output of a node action, inside the node's own panel — the point is to
+// read it against the thing you ran it on, not in a card somewhere else.
+function nodeRunPane(t){
+  const r = runs.get(t.id) || {};
+  const state = r.busy ? `<span class="running">running</span>`
+    : r.error ? `<span class="err">${esc(r.error)}</span>`
+    : r.code !== undefined
+      ? `<span class="${r.code===0?'exit0':'exitN'}">exit ${r.code}</span>` : "";
+  return `<div class="lbl" style="margin-top:10px"><span>${esc(t.id)}</span>${state}</div>
+    <pre class="term" id="run-${esc(t.id)}"
+         style="max-height:220px;overflow:auto">${ansiToHtml(clip(runout.get(t.id)))}</pre>
+    ${runFiles(t, r)}
+    <div id="promote-${esc(t.id)}" class="promote"></div>`;
+}
+
+async function runOnNode(toolId, nodeId){
+  const t = tools.get(toolId), n = (mapData.nodes||{})[nodeId];
+  if(!t || !n || !proj) return;
+  const command = nodeCommand(t, n);
+  if(!command) return;
+  nodeRunOf.set(toolId, nodeId);
+  runs.set(toolId, {busy:true}); runout.set(toolId, ""); promote.delete(toolId);
+  render();
+  try{
+    const d = await (await fetch(`/tools/${toolId}/run`,{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({command, project: proj.id,
+                           section: sectionOf(toolId), input: ""})})).json();
+    if(d.error){ runs.set(toolId, {error:d.error}); render(); }
+  }catch(e){ runs.set(toolId, {error:"request failed"}); render(); }
+}
+
+function nodeDetail(id){
   const n = (mapData.nodes||{})[id];
-  if(!n) return;
+  if(!n) return "";
   const edges = Object.values(mapData.edges||{});
   const outward = edges.filter(e=>e.frm===id);
   const inward  = edges.filter(e=>e.to===id);
@@ -1222,46 +2451,161 @@ function showNode(id){
       ${conflict?'<span class="exitN sub"> sources disagree</span>':''}</div>`;
   }).join("") || `<div class="sub">no attributes</div>`;
 
-  document.getElementById("nodedetail").innerHTML = `
-    <div class="card" style="padding:14px;margin-bottom:12px">
+  return `
+    <div class="card" style="padding:14px">
       <div class="lbl"><span>${esc(n.kind)}</span>
         <span class="sub" style="cursor:pointer;color:var(--accent)"
-              onclick="document.getElementById('nodedetail').innerHTML=''">close</span></div>
+              onclick="closeNode()">close</span></div>
       <div style="font-size:15px;margin-bottom:8px"><code>${esc(n.value)}</code></div>
       ${attrRows}
       <div class="sub" style="margin-top:8px">
+        ${n.in_scope === false ? `<span class="exitN">out of scope</span>`
+          : `<span class="exit0">in scope</span>`}
+        ${n.scope_why ? ` — ${esc(n.scope_why)}` : ""}
+        ${(n.tags||[]).includes("scope") ? " · scope root"
+          : (n.tags||[]).includes("accepted") ? " · you promoted it" : ""}
+        ${(n.tags||[]).includes("under-wildcard")
+          ? ` · <span title="Every name here answers with the same address, so
+                the scanners are given the wildcard once instead of each name"
+              >under a wildcard, not scanned separately</span>` : ""}
+        ${n.third_party ? ` · <span class="exitN">third-party infrastructure${
+            thirdPartyWho(n) ? " (" + esc(thirdPartyWho(n)) + ")" : ""}</span>` : ""}
+        </div>
+      <div class="sub" style="margin-top:4px">
         found by ${(n.sources||[]).map(s=>esc(s.tool)).join(", ")||"you"}
         ${Object.keys(n.checks||{}).length
           ? ` · checked: ${Object.keys(n.checks).join(", ")}` : ""}</div>
-      ${outward.length? `<div class="sub" style="margin-top:6px">→ ${outward.map(e=>
-          `${esc(e.rel)} <code>${esc(e.to)}</code>`).join(", ")}</div>`:""}
-      ${inward.length? `<div class="sub">← ${inward.map(e=>
-          `<code>${esc(e.frm)}</code> ${esc(e.rel)}</div>`).join(", ")}`:""}
+      ${relRows(outward, REL_OUT, e=>e.to)}
+      ${relRows(inward, REL_IN, e=>e.frm)}
+      ${!outward.length && !inward.length ? `<div class="sub" style="margin-top:6px">
+          nothing resolved against this yet — run the resolver</div>` : ""}
+      ${(()=>{
+        // Run something at this one thing. The phases sweep; this is the
+        // microscope, and what it finds is attached to the node you aimed it at.
+        const acts = nodeToolsFor(n.kind);
+        if(!acts.length) return "";
+        const r = runs.get(openNode && nodeRunOf.get(openNode)) || {};
+        return `<div class="fields" style="margin-top:10px">
+          ${acts.map(t=>{
+            const busy = (runs.get(t.id)||{}).busy;
+            const cmd = nodeCommand(t, n);
+            return `<button class="mini ghost" ${busy?"disabled":""}
+              title="${esc(cmd)}"
+              onclick="runOnNode('${esc(t.id)}','${esc(id)}')">${
+                busy ? "running…" : esc(t.id)}</button>`;
+          }).join("")}
+        </div>
+        ${acts.filter(t=>nodeRunOf.get(t.id) === id && runs.has(t.id))
+              .map(t=>nodeRunPane(t)).join("")}`;
+      })()}
+      <div class="fields" style="margin-top:10px">
+        ${n.in_scope === false
+          ? `<button onclick="setNodeScope('${esc(id)}','in')"
+               title="Treat this as in scope regardless of the scope text">
+               Move to in scope</button>`
+          : `<button class="ghost" onclick="setNodeScope('${esc(id)}','out')"
+               title="Keep it on the map but never scan it">
+               Move to out of scope</button>`}
+      </div>
       <div class="addrow" style="margin-top:10px">
-        <input id="nnote" placeholder="note" value="${esc(n.note||"")}" style="flex:1">
+        <input id="nnote" placeholder="note" style="flex:1"
+               oninput="noteDrafts.set('${esc(id)}', this.value)"
+               value="${esc(noteDrafts.has(id) ? noteDrafts.get(id) : (n.note||""))}">
         <button onclick="saveNode('${esc(id)}')">Save</button>
-        ${n.dismissed
-          ? `<button class="ghost" onclick="restoreNode('${esc(id)}')">Restore</button>`
-          : `<button class="ghost" onclick="dismissNode('${esc(id)}')">Dismiss</button>`}
+        <button class="ghost" style="color:var(--red)"
+          title="Remove it from the map entirely"
+          onclick="deleteNode('${esc(id)}','${esc(n.value)}')">Delete</button>
       </div>
     </div>`;
+}
+
+// Which panel is picking, and what it has picked. Both by id and in state, so
+// they survive the re-renders that arrive while you are still choosing.
+let moveFrom = null;                 // "in" | "out" — the panel they are in now
+const picked = new Set();
+function pickNode(id){
+  picked.has(id) ? picked.delete(id) : picked.add(id);
+  render();
+}
+function pickMany(ids, on){ ids.forEach(i=>on ? picked.add(i) : picked.delete(i)); render(); }
+// Toggle: clicking "move" on the panel you are already picking in closes it,
+// and clicking it on the other panel switches sides rather than leaving two
+// open at once.
+function toggleMove(side){
+  moveFrom = (moveFrom === side) ? null : side;
+  picked.clear();
+  scopeNote = "";              // last move's receipt, not this one's
+  render();
+}
+function cancelMove(){ moveFrom = null; picked.clear(); render(); }
+
+// Always to the other side: you picked them where they are, so the only move
+// that makes sense is out of it.
+async function confirmMove(){
+  const to = (moveFrom||"").endsWith("out") ? "in" : "out";
+  const ids = [...picked];
+  moveFrom = null;
+  await setScope(ids, to);
+}
+
+// Your call on scope, kept as a tag so it survives re-scans and scope edits.
+// The rules cover the engagement; this covers what they cannot express — the
+// client's own address behind a domain-only scope, or a host inside their range
+// they have asked you to leave alone. "auto" drops it back to the rules.
+let scopeNote = "";
+async function setScope(ids, mode){
+  if(!ids.length || !proj) return;
+  try{
+    const d = await (await fetch(`/projects/${proj.id}/map/scope`,{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({ids, mode})})).json();
+    // Say when the move took more than you picked. A name and its address are
+    // one target, so moving one moves the other — silently would be worse.
+    scopeNote = d.also
+      ? `moved ${d.changed} — ${d.also} related node${d.also===1?"":"s"} followed`
+      : "";
+    picked.clear();
+    await loadMap();
+  }catch(e){}
+}
+async function setNodeScope(id, mode){
+  await setScope([id], mode);
+  focusNode(id);           // stay on the node you just changed
 }
 
 async function saveNode(id){
   const note = document.getElementById("nnote").value;
   await fetch(`/projects/${proj.id}/map/${encodeURIComponent(id)}`,{method:"PATCH",
     headers:{"Content-Type":"application/json"}, body:JSON.stringify({note})});
+  noteDrafts.delete(id);      // saved, so the record is the truth again
   loadMap();
 }
-// Dismiss rather than delete: the next run that finds it again would otherwise
-// resurrect it silently, and you would dismiss the same false positive forever.
-async function dismissNode(id){
-  await fetch(`/projects/${proj.id}/map/${encodeURIComponent(id)}`,{method:"DELETE"});
-  loadMap();
+// Rewrite one bare rule as a wildcard, leaving the rest of the scope text as
+// you typed it. Editing scope re-seeds the map, so the roots follow.
+async function widenScope(rule){
+  if(!proj) return;
+  const next = (proj.scope||"").split(/([,\s;]+)/).map(tok =>
+    tok.trim().toLowerCase().replace(/\.$/, "") === rule ? "*." + tok.trim() : tok
+  ).join("");
+  try{
+    const d = await (await fetch(`/projects/${proj.id}`,{method:"PATCH",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({scope: next})})).json();
+    if(!d.error){ await loadProjects(proj.id); loadMap(); }
+  }catch(e){}
 }
-async function restoreNode(id){
-  await fetch(`/projects/${proj.id}/map/${encodeURIComponent(id)}`,{method:"PATCH",
-    headers:{"Content-Type":"application/json"}, body:JSON.stringify({restore:true})});
+
+// Delete means delete: the node goes, with its links and its note. There is no
+// soft-delete to fall back on, so a later run that finds the value again offers
+// it as a fresh discovery — which is the trade for not keeping a record you said
+// to remove.
+async function deleteNode(id, value){
+  if(!confirm(`Delete ${value} from the map?\n\nIts links and note go with it. `
+              + `A later scan that finds it again will offer it as new.\n\n`
+              + `This cannot be undone.`)) return;
+  await fetch(`/projects/${proj.id}/map/${encodeURIComponent(id)}`,{method:"DELETE",
+    headers:{"Content-Type":"application/json"}, body:JSON.stringify({hard:true})});
+  openNode = null;             // it is gone; nothing to keep open
   loadMap();
 }
 
@@ -1282,6 +2626,14 @@ function renderProject(){
     ${row("Notes", proj.notes, "notes", "anything worth remembering")}
     <div id="pedit"></div>
     <div class="setrow" style="margin-top:20px">
+      <div class="sub">Clearing empties the map and deletes every run and its
+        retained files, then re-seeds the scope. The engagement, its phases and
+        your installed tools stay — this is for starting the work over.
+        <span id="clearmsg"></span></div>
+      <span class="setedit" style="color:var(--red)"
+            onclick="clearProjectData()">clear data</span>
+    </div>
+    <div class="setrow">
       <div class="sub">Deleting removes this engagement and its run history.
         Installed tools are shared and stay in the library.</div>
       <span class="setedit" style="color:var(--red)" onclick="deleteProject()">delete</span>
@@ -1322,6 +2674,27 @@ async function createProject(){
   document.getElementById("np-scope").value = "";
   msg.textContent = "";
   await switchProject(d.id);
+}
+
+// Start the engagement over without setting it up again. The browser's copy of
+// the run state goes too — it is a cache of what was just deleted on disk.
+async function clearProjectData(){
+  if(!confirm(`Clear all data for ${proj.label}?\n\nThis empties the map and `
+              + `deletes every recorded run, including the files they retained. `
+              + `The engagement, its scope and your installed tools stay.\n\n`
+              + `This cannot be undone.`)) return;
+  const msg = document.getElementById("clearmsg");
+  if(msg) msg.textContent = " · clearing…";
+  try{
+    const d = await (await fetch(`/projects/${proj.id}/clear`,{method:"POST"})).json();
+    if(d.error){ if(msg) msg.textContent = " · " + d.error; return; }
+    runs.clear(); runout.clear(); promote.clear();
+    restored = true;                 // nothing left on disk to restore
+    await loadMap();                 // re-renders with the re-seeded scope
+    // Re-query: the render above rebuilt this view, message and all.
+    const after = document.getElementById("clearmsg");
+    if(after) after.textContent = ` · cleared ${d.nodes} node(s), ${d.runs} run(s)`;
+  }catch(e){ if(msg) msg.textContent = " · clear failed"; }
 }
 
 async function deleteProject(){

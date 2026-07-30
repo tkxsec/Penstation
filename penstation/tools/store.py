@@ -49,12 +49,18 @@ class ToolRecord:
     tried: list = field(default_factory=list)   # recipe notes, for the handoff prompt
     baseline: bool = False       # part of an engagement type's baseline toolset
     check: str = ""              # coverage kind this tool satisfies (portscan, resolve…)
-    purpose: str = ""            # why it is in the baseline
     baseline_order: int = 0      # position in the baseline workflow
     consumes: list = field(default_factory=list)   # map node kinds it takes as input
     result_file: str = ""        # basename of the output file holding its results;
                                  # when set, promotion reads only that file rather
                                  # than sweeping every log the tool wrote
+    output_files: list = field(default_factory=list)
+                                 # basename globs worth listing after a run;
+                                 # empty lists everything the run retained
+    targets: list = field(default_factory=list)
+                                 # node kinds this tool can be pointed at one
+                                 # at a time, from the map. `consumes` is the
+                                 # list form; this is the single-target form
     run_template: str = ""       # extracted hint — shown as the input's placeholder
     last_command: str = ""       # what you last ran, for history only
     command_override: str = ""   # your edit, if you made one; clears back to

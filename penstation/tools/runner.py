@@ -182,8 +182,11 @@ async def run_command(rec: ToolRecord, command: str, on_line: OnLine,
             for p in sorted(outdir.rglob("*")):
                 if p.is_file():
                     # Path relative to the run dir, so a screenshot in a
-                    # subfolder is still addressable later.
-                    files.append({"name": str(p.relative_to(outdir)),
+                    # subfolder is still addressable later. as_posix() because
+                    # the name becomes a URL path: str() on Windows yields
+                    # "scan_dir\output.json", which encodes to one %5C-laden
+                    # segment the file route cannot resolve.
+                    files.append({"name": p.relative_to(outdir).as_posix(),
                                   "bytes": p.stat().st_size})
         return {"command": " ".join(shlex.quote(a) for a in argv),
                 "code": code, "files": files}

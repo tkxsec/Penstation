@@ -38,7 +38,6 @@ BACKBONE = [
         "section": "reconnaissance",
         "check": "subdomain-enum",
         "consumes": [],                    # starts from the scope itself
-        "purpose": "discovery — the one job no ancient tool does",
         # `-em dnsbrute dnsbrute_mutations` excludes the brute-force modules.
         # Re-verified against bbot 3.0.1 after the version bump, since a major
         # release can rename modules and a renamed one would fail silently:
@@ -71,6 +70,14 @@ BACKBONE = [
         #
         # Read the answer, not the working.
         "result_file": "subdomains.txt",
+        # Which retained files are worth listing. bbot writes thirteen — the four
+        # here plus debug.log, scan.log, error.log, preset.yml, wordcloud.tsv and
+        # a couple of timestamped tables — and a wall of its own working notes
+        # buries the outputs you came for. Everything is still on disk; this is
+        # only what the run offers you as a link. Globs match the basename, and
+        # a tool that declares nothing lists everything (nmap's three formats
+        # are all output).
+        "output_files": ["output.*", "subdomains.txt"],
         "dockerfile": (
             "FROM python:3.12-slim\n"
             "RUN apt-get update && apt-get install -y --no-install-recommends "
@@ -88,11 +95,54 @@ BACKBONE = [
         ),
     },
     {
+        # No "source": github.com/projectdiscovery/subfinder is where the pinned
+        # version comes from, but naming the repo here sends the install through
+        # repo inspection, which is a GitHub API call the rest of the baseline
+        # does not need and cannot fail on. It also read the README and replaced
+        # this declared command with a bare `subfinder -d {{target}}`.
+        "id": "subfinder",
+        "section": "reconnaissance",
+        # The same coverage kind as bbot on purpose: either satisfies "we looked
+        # for subdomains". They are here together because their source lists
+        # differ and public sources fail — crt.sh returned max_client_conn to
+        # bbot and answered subfinder minutes later, which cost eight subdomains
+        # with nothing logged above INFO. One passive tool is one bad afternoon
+        # away from a quiet miss.
+        "check": "subdomain-enum",
+        "consumes": [],                    # starts from the scope itself
+        # -d takes the whole comma-separated list, so a scope naming three
+        # domains is one run. -all turns on every source rather than the fast
+        # default: breadth is the entire reason this is here, and the sources it
+        # adds are the ones bbot does not carry.
+        #
+        # No -silent, for the same reason nmap gets -vv: subfinder with -all can
+        # sit for minutes, and its progress lines are how you tell a slow source
+        # from a hung one. They go to stderr, so they never reach the results.
+        "run": "subfinder -d {{targets}} -all -o {{outdir}}/subdomains.txt",
+        # -o writes exactly the names it found and nothing else.
+        "result_file": "subdomains.txt",
+        "output_files": ["subdomains.txt"],
+        # Built rather than pulled, and pinned like the rest of the baseline.
+        # A Go binary needs no runtime, so the toolchain stays in the build
+        # stage: shipping golang:1.24-alpine would be ~250MB of compiler to run
+        # one static binary. ca-certificates is not optional — every source is
+        # queried over HTTPS, and without it subfinder fails on all of them.
+        "dockerfile": (
+            "FROM golang:1.24-alpine AS build\n"
+            "RUN apk add --no-cache git\n"
+            "RUN go install -v github.com/projectdiscovery/subfinder/v2/"
+            "cmd/subfinder@v2.14.0\n"
+            "FROM alpine:3.20\n"
+            "RUN apk add --no-cache ca-certificates\n"
+            "COPY --from=build /go/bin/subfinder /usr/local/bin/subfinder\n"
+            'ENTRYPOINT ["subfinder"]\n'
+        ),
+    },
+    {
         "id": "dig",
         "section": "reconnaissance",
         "check": "resolve",
         "consumes": ["domain"],            # every domain on the map
-        "purpose": "DNS resolution — format unchanged since the 1980s",
         # `+short` was wrong for a batch: with -f it prints bare IPs with no
         # indication of which name each belongs to — three domains produced five
         # unattributable addresses, so `domain resolves_to host` edges could not
@@ -111,7 +161,6 @@ BACKBONE = [
         # hosts once dig has resolved some; domains before that, since nmap
         # resolves names itself.
         "consumes": ["host", "domain"],
-        "purpose": "ports and services — XML schema stable for 15 years",
         # -oA writes all three formats from one scan: .xml to parse, .nmap to
         # read, .gnmap one line per host. Runs retain their files, so the extra
         # two are free evidence — and .gnmap is the one you grep during an
@@ -132,15 +181,48 @@ BACKBONE = [
         ),
     },
     {
+        "id": "httpx",
+        "section": "web-analysis",
+        "check": "http-probe",
+        # Ports first, hosts before nmap has produced any. This is the step
+        # between "something is listening on 443" and "it is a Grafana login",
+        # and the one the baseline was missing: nmap can hand back forty web
+        # ports and curl takes one target at a time.
+        "consumes": ["port", "host", "domain"],
+        # -l a list, one probe each, concurrent. -sc/-title/-td/-tls-grab are
+        # the four facts worth having for every target; -fr because a bare probe
+        # of a redirecting host reports the redirect, not the app behind it.
+        # -json so promotion reads structured records rather than a formatted
+        # table, and -silent to keep the banner out of them.
+        "run": "httpx -l {{input}} -sc -title -td -tls-grab -fr -silent "
+               "-json -o {{outdir}}/httpx.jsonl",
+        "result_file": "httpx.jsonl",
+        "output_files": ["httpx.jsonl"],
+        # Same two-stage build as subfinder, pinned the same way. go.mod for
+        # v1.10.0 asks for go 1.26.
+        "dockerfile": (
+            "FROM golang:1.26-alpine AS build\n"
+            "RUN apk add --no-cache git\n"
+            "RUN go install -v github.com/projectdiscovery/httpx/"
+            "cmd/httpx@v1.10.0\n"
+            "FROM alpine:3.20\n"
+            "RUN apk add --no-cache ca-certificates\n"
+            "COPY --from=build /go/bin/httpx /usr/local/bin/httpx\n"
+            'ENTRYPOINT ["httpx"]\n'
+        ),
+    },
+    {
         "id": "curl",
         "section": "web-analysis",
         # curl takes one URL, not a list — there is no -iL equivalent, and the
         # container runs argv with no shell so `$(cat …)` cannot expand. It is
-        # the tool for looking closely at one thing; probing 500 at once is a
-        # different job. Click a node on the map to point it somewhere.
+        # the tool for looking closely at one thing; probing 500 at once is
+        # httpx's job. `targets` is the other half of that: the kinds of node
+        # you can point it at from the map, which is where {{target}} comes
+        # from rather than the project's primary domain.
         "consumes": [],
+        "targets": ["domain", "host", "webapp"],
         "check": "http-probe",
-        "purpose": "HTTP headers of a single target, in detail",
         # -L follows redirects: a bare HEAD on http:// usually returns a 301 and
         # tells you nothing about the app behind it. Verified against a real
         # redirect — you see the 301 and the final 200.
@@ -164,7 +246,9 @@ BACKBONE = [
         "section": "web-analysis",
         "check": "tls",
         "consumes": [],                    # one connection at a time, like curl
-        "purpose": "certificate and TLS detail for one target",
+        # Not webapp: s_client wants a host and a port, and a URL would arrive
+        # with a scheme it cannot dial.
+        "targets": ["domain", "host"],
         "run": "openssl s_client -connect {{target}}:443 -servername {{target}}",
         "dockerfile": (
             "FROM alpine:3.20\n"

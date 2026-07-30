@@ -61,14 +61,23 @@ class Run:
         return _dir(self.project) / self.id
 
     def file_path(self, name: str) -> Path | None:
-        """Resolve a stored file, refusing anything outside the run's dir."""
+        """Resolve a stored file, refusing anything outside the run's dir.
+
+        The name arrives from a URL, so it uses "/". Runs recorded before that
+        was normalised stored the Windows separator instead — "scan_dir\\out.json"
+        — and those records have to stay readable, on Linux and macOS too, where
+        that is one filename rather than a path. Hence the second attempt.
+        """
         base = self.files_dir.resolve()
-        try:
-            target = (base / name).resolve()
-            target.relative_to(base)     # rejects ../ traversal
-        except (OSError, ValueError):
-            return None
-        return target if target.is_file() else None
+        for candidate in (name, name.replace("\\", "/")):
+            try:
+                target = (base / candidate).resolve()
+                target.relative_to(base)     # rejects ../ traversal
+            except (OSError, ValueError):
+                continue                     # absolute or escaping — not ours
+            if target.is_file():
+                return target
+        return None
 
     def append(self, text: str) -> None:
         with self.log_path.open("a") as fh:
@@ -122,6 +131,11 @@ def for_tool(project: str, tool: str, limit: int | None = None) -> list[Run]:
             out.append(r)
     out.sort(key=lambda r: r.started_at, reverse=True)
     return out[:limit] if limit else out
+
+
+def count(project: str) -> int:
+    """How many runs are on file for an engagement."""
+    return len(list(_dir(project).glob("*.json")))
 
 
 def forget_project(project: str) -> None:
