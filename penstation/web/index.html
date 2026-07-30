@@ -24,6 +24,7 @@
   nav a.on{ background:var(--panel); color:var(--fg); font-weight:600;
     box-shadow:inset 2px 0 0 var(--accent); }
   nav .navgap{ height:14px; }
+  nav .navsub a{ padding-left:24px; font-size:12px; }
   nav .count{ font-size:11px; color:var(--muted); font-weight:400; }
   nav .dot{ width:7px; height:7px; border-radius:50%; background:var(--red);
     flex:0 0 auto; }
@@ -122,7 +123,32 @@
   table.hist tr{ cursor:pointer; border-bottom:1px solid var(--line); }
   table.hist tr:hover{ background:var(--panel); }
   table.hist tr.dim td{ opacity:.45; }
+  .mapgroup{ margin-top:10px; }
+  .mapkind{ font-size:11px; text-transform:uppercase; letter-spacing:.5px;
+    color:var(--dim); margin-bottom:4px; }
+  .mapnode{ display:flex; align-items:center; gap:8px; padding:3px 6px;
+    border-radius:4px; cursor:pointer; font-size:13px; }
+  .mapnode:hover{ background:var(--bg); }
+  .mapnode.dim{ opacity:.45; }
+  .pill{ font-size:10px; padding:1px 6px; border-radius:8px;
+    border:1px solid var(--line); color:var(--muted); }
+  .graphbar{ border:1px solid var(--line); border-radius:8px; padding:10px 12px;
+    margin-bottom:16px; background:var(--panel); }
+  .graphbar.empty-graph{ color:var(--muted); font-size:13px; }
+  .gtop{ display:flex; justify-content:space-between; align-items:baseline;
+    gap:12px; flex-wrap:wrap; }
+  .gcount{ font-size:12px; color:var(--muted); margin-right:14px; }
+  .gcount b{ color:var(--fg); font-size:14px; }
+  .grecent{ margin-top:8px; display:flex; flex-wrap:wrap; gap:4px 8px; }
+  .grecent code{ font-size:11px; color:var(--muted); }
   .promote{ margin-top:10px; }
+  /* Not inside .lbl: that row is uppercased and space-between, which turned a
+     file list into a shouted, collided mess. */
+  .runfiles{ margin-top:6px; display:flex; flex-wrap:wrap; gap:2px 14px; }
+  .runfiles a{ color:var(--accent); text-decoration:none;
+               font-family:ui-monospace,Menlo,monospace; font-size:11px; }
+  .runfiles a:hover{ text-decoration:underline; }
+  .runfiles .sub{ margin-left:5px; font-size:10px; }
   .inwrap textarea{ width:100%; box-sizing:border-box; font-family:ui-monospace,
     SFMono-Regular,Menlo,monospace; font-size:12px; padding:8px;
     border:1px solid var(--line); border-radius:6px; background:var(--bg);
@@ -139,8 +165,13 @@
     gap:12px; margin:-4px 0 6px; }
   .setedit{ cursor:pointer; color:var(--accent); font-size:11px; font-weight:600;
     letter-spacing:.5px; text-transform:uppercase; flex:0 0 auto; }
+  /* gap + nowrap on the label: without them a long right-hand side squeezed the
+     label until it wrapped mid-word, which is how "output" and "exit 0" became
+     "OUTPUTEXIT. 0". */
   .lbl{ font-size:11px; text-transform:uppercase; letter-spacing:.5px; color:var(--dim);
-                margin-bottom:4px; display:flex; justify-content:space-between; }
+                margin-bottom:4px; display:flex; justify-content:space-between;
+                align-items:baseline; gap:12px; }
+  .lbl > span:first-child{ white-space:nowrap; }
   .runbox .fields{ display:flex; gap:8px; align-items:center; }
   .runbox input{ flex:1; font-family:ui-monospace,Menlo,monospace; font-size:12px; }
   .exit0{ color:var(--green); } .exitN{ color:var(--red); }
@@ -179,10 +210,7 @@
       <button id="addbtn" onclick="add()">Add</button>
     </div>
     <div class="err" id="err"></div>
-    <h2 style="display:flex;justify-content:space-between;align-items:baseline;margin-top:26px">
-      <span>All tools</span>
-      <span id="clearall" style="cursor:pointer;color:var(--red);font-size:12px;
-            font-weight:400" onclick="clearAll()"></span></h2>
+    <h2 style="margin-top:26px">All tools</h2>
     <div id="alllist"><div class="empty">Nothing added yet.</div></div>
   </section>
   <section id="v-project" hidden></section>
@@ -254,7 +282,10 @@ function toggleNav(){
 }
 
 function setView(v){
+  const wasMap = view === "map" || SECTION_LABEL.has(view);
   view = v;
+  const isMap = v === "map" || SECTION_LABEL.has(v);
+  if(isMap && !wasMap) setTimeout(loadMap, 0);   // fetch once on entry
   if(!navOpen) toggleNav();
   switcherOpen = false;
   history.replaceState(null, "", "#" + (proj?proj.id:"") + "/" + v);
@@ -264,7 +295,9 @@ function setView(v){
 async function switchProject(id){
   await loadProjects(id);
   switcherOpen = false;
-  setView(SECTIONS.length ? SECTIONS[0][0] : "project");
+  mapData = {nodes:{}, edges:{}};      // never show one client's map under another
+  setView("map");
+  loadMap();
 }
 
 const tools = new Map();      // id -> record
@@ -275,6 +308,15 @@ const runout = new Map();     // id -> accumulated live run output
 const tabs   = new Map();     // id -> "run" | "log"
 const ACTIVE = ["queued","inspecting","building","repairing","verifying"];
 const esc = s => (s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+
+// Raw byte counts made a file list unreadable: "(8400B)" next to "(24249B)" says
+// nothing at a glance about which one holds the results.
+function bytes(n){
+  n = +n || 0;
+  if(n < 1024) return n + " B";
+  if(n < 1024*1024) return (n/1024).toFixed(n < 10240 ? 1 : 0) + " KB";
+  return (n/1048576).toFixed(1) + " MB";
+}
 
 /* ---- ANSI → HTML, so output looks like the real terminal ----
    Tools colour their output with ANSI escapes (bbot emits ~110 per scan).
@@ -418,42 +460,58 @@ async function add(){
 }
 const retry = id => fetch(`/tools/${id}/retry`,{method:"POST"});
 
-async function assignTool(){
-  const sel = document.getElementById("pick");
+// Build the engagement type's baseline. Images are shared, so a second project
+// reuses whatever is already built rather than rebuilding it.
+async function installBaseline(){
+  const msg = document.getElementById("basemsg");
+  if(msg) msg.textContent = "installing…";
+  const d = await (await fetch(`/projects/${proj.id}/baseline`,
+                               {method:"POST"})).json();
+  if(d.error){ if(msg) msg.textContent = d.error; return; }
+  if(msg) msg.textContent =
+    `building ${d.queued.length}, reusing ${d.reused.length}`;
+  await loadProjects(proj.id);
+  loadMap();
+}
+
+async function assignTool(sect){
+  const sel = document.getElementById("pick-"+sect);
   if(!sel.value) return;
-  await fetch(`/projects/${proj.id}/sections/${view}/tools`,{method:"POST",
+  await fetch(`/projects/${proj.id}/sections/${sect}/tools`,{method:"POST",
     headers:{"Content-Type":"application/json"},
     body:JSON.stringify({tool_id: sel.value})});
-  await loadProjects(proj.id); render();
+  await loadProjects(proj.id); loadMap();
 }
 
 // Unassign only. The image stays installed and available to every other
 // engagement — uninstalling lives under Add Tool and asks first.
-async function unassign(id){
-  await fetch(`/projects/${proj.id}/sections/${view}/tools/${id}`,{method:"DELETE"});
-  await loadProjects(proj.id); render();
+async function unassign(id, sect){
+  await fetch(`/projects/${proj.id}/sections/${sect}/tools/${id}`,{method:"DELETE"});
+  await loadProjects(proj.id); loadMap();
 }
 
 // Removes every record, image, per-tool volume and cached repo signal.
+// Lives under Settings and needs the word typed. A confirm() dialog was not
+// enough protection: one stray accept destroyed three installed tools, their
+// images and volumes. Irreversible actions should be hard to trigger by
+// accident, not merely acknowledged.
 async function clearAll(){
-  const n = tools.size;
-  if(!n) return;
-  if(!confirm(`Delete all ${n} tool(s)?\n\nThis also removes their Docker images, `
-              + `per-tool volumes, and cached repo data. Cannot be undone.`)) return;
-  const el = document.getElementById("clearall");
-  el.textContent = "clearing…";
+  const box = document.getElementById("clearword");
+  const msg = document.getElementById("clearmsg");
+  if(!box || (box.value||"").trim().toLowerCase() !== "delete"){
+    if(msg) msg.textContent = 'type "delete" to confirm';
+    return;
+  }
+  msg.textContent = "clearing…";
   try{
     const d = await (await fetch("/tools",{method:"DELETE"})).json();
     tools.clear(); logs.clear(); runout.clear(); runs.clear(); open.clear();
-    render();
-    el.textContent = `removed ${d.removed.length} tool(s), ${d.cache} cached`;
-    setTimeout(renderClear, 3000);
-  }catch(e){ el.textContent = "clear failed"; }
+    box.value = "";
+    msg.textContent = `removed ${d.removed.length} tool(s), ${d.cache} cached entries`;
+    await loadProjects(proj && proj.id); render();
+  }catch(e){ msg.textContent = "clear failed"; }
 }
-function renderClear(){
-  const el = document.getElementById("clearall");
-  if(el) el.textContent = tools.size ? "clear all" : "";
-}
+function renderClear(){}   // nothing to keep in sync now
 
 // Compose the whole failure into a prompt you can paste into a capable model,
 // then paste its Dockerfile straight back into the box above. Keeps a strong
@@ -529,17 +587,26 @@ function ago(ts){
   return new Date(ts*1000).toLocaleDateString();
 }
 
+// Which phase a tool is filed under, so a run is attributed correctly no matter
+// where on the page you started it from.
+function sectionOf(id){
+  if(!proj) return "";
+  for(const [k,v] of Object.entries(proj.sections||{})) if((v||[]).includes(id)) return k;
+  const t = tools.get(id);
+  return t && t.baseline ? "baseline" : "";
+}
+
 async function doRun(id){
   const command = document.getElementById("cmd-"+id).value.trim();
   if(!command) return;
-  const t = tools.get(id); if(t) t.last_command = command;   // keep it on re-render
   runs.set(id, {busy:true}); runout.set(id, ""); render();
   try{
     const d = await (await fetch(`/tools/${id}/run`,{method:"POST",
       headers:{"Content-Type":"application/json"},
       // The engagement and section are what make the recorded run attributable.
-      body:JSON.stringify({command, project: proj?proj.id:"", section: view,
-                           input: (document.getElementById("in-"+id)||{}).value || ""})})).json();
+      body:JSON.stringify({command, project: proj?proj.id:"", section: sectionOf(id),
+                           input: (document.getElementById("in-"+id)||{}).value
+                                  || inbox.get(id) || ""})})).json();
     if(d.error){ runs.set(id, {error:d.error}); render(); }
     // success: output arrives via run_log/run_done on the event stream
   }catch(e){ runs.set(id, {error:"request failed"}); render(); }
@@ -596,8 +663,7 @@ function renderNav(){
     + `<a class="${view==='project'?'on':''}" onclick="setView('project')"><span>Project</span></a>`
     + `<a class="${view==='map'?'on':''}" onclick="setView('map')"><span>Map</span>
          ${mapCount ? `<span class="count">${mapCount}</span>` : ""}</a>`
-    + `<div class="navgap"></div>`
-    + SECTIONS.map(([k,l])=>item(k,l)).join("")
+    + `<div class="navsub">` + SECTIONS.map(([k,l])=>item(k,l)).join("") + `</div>`
     + `<div class="navgap"></div>`
     + `<a class="${view==='add'?'on':''}" onclick="setView('add')">
          <span>+ Add Tool</span>${installMark}</a>`
@@ -613,6 +679,8 @@ function render(){
     history.replaceState(null, "", "#" + view);
   }
   renderNav();
+  // Map and the phases are separate views. Map holds the baseline workflow that
+  // builds it; a phase holds the tools you added yourself. No tool appears twice.
   const isSection = SECTION_LABEL.has(view);
   document.getElementById("v-add").hidden        = view !== "add";
   document.getElementById("v-settings").hidden   = view !== "settings";
@@ -620,17 +688,17 @@ function render(){
   document.getElementById("v-map").hidden        = view !== "map";
   document.getElementById("v-newproject").hidden = view !== "newproject";
   document.getElementById("v-tools").hidden      = !isSection;
+  if(isSection) document.getElementById("secttitle").textContent =
+    SECTION_LABEL.get(view);
   if(view === "settings") renderSettings();
   if(view === "project") renderProject();
-  if(view === "map") loadMap();
   renderClear();
-  if(!isSection && view !== "add") return;
-  if(isSection) document.getElementById("secttitle").textContent = SECTION_LABEL.get(view);
+  if(!isSection && view !== "map" && view !== "add") return;
 
   // `card` is a const, so every use has to come after this point — calling it
   // above threw a ReferenceError that silently aborted the rest of render(),
   // leaving "All tools" stuck on its placeholder.
-  const card = (t, mode)=>{
+  const card = (t, mode, sect)=>{
     const working = ACTIVE.includes(t.status);
     const wait = (t.status==="queued" && t.queue_position>0) ? ` (position ${t.queue_position})` : "";
     const badge = `<span class="badge ${t.status}">${working?'<span class="spin"></span> ':''}${t.status}${wait}</span>`;
@@ -643,39 +711,107 @@ function render(){
     // "<tool> example.com" guess is worse than no guess — it teaches the wrong
     // invocation (bbot actually needs -t).
     const tmpl = t.run_template || "";
-    const hint = /^\S+\s+-/.test(tmpl)
+    const target = (proj && proj.target) || "";
+    const targets = ((proj && proj.targets) || []).join(",");
+    // Baseline commands are written against the scope: {{targets}} for tools
+    // that take a list, {{target}} for tools that take one. Filling them here
+    // means editing the scope changes what every baseline tool runs against.
+    // {{scope}} is everything you were given (domains and CIDRs), space
+    // separated for tools that take a target list; {{targets}} is domains only;
+    // {{target}} is the primary one.
+    const scopeAll = ((proj && proj.scope_all) || []).join(" ");
+    const ready = tmpl && target
+      ? tmpl.replaceAll("{{scope}}", scopeAll || target)
+            .replaceAll("{{targets}}", targets || target)
+            .replaceAll("{{target}}", target)
+      : "";
+    // The generated command is authoritative; an override is yours and shadows
+    // it until you clear it. Running no longer captures the command, so fixing
+    // a baseline command reaches every project instead of being permanently
+    // masked by whatever was typed once.
+    const overridden = !!(t.command_override||"").trim();
+    const prefill = overridden ? t.command_override : ready;
+    const editing = cmdEdit.has(t.id);
+    const hint = ready || (/^\S+\s+-/.test(tmpl)
       ? tmpl.replace("{{target}}", "example.com")
-      : `type a command — check --help →`;
+      : `type a command — check --help →`);
+    // The header keeps the one-word verdict. The file list used to live here too,
+    // inside an uppercased space-between row — a dozen paths came out as
+    // "OUTPUTEXIT. 0 FILES: GOATED_ISAAC/DEBUG.LOG (8400B), …" jammed against the
+    // label and shouting. It gets its own row below instead.
     let footer = "";
-    if (busy)             footer = `<span class="running">running…</span>`;
+    if (busy)              footer = `<span class="running">running…</span>`;
     else if (r && r.error) footer = `<span class="err">${esc(r.error)}</span>`;
     else if (r && r.code !== undefined)
-      footer = `<span class="${r.code===0?'exit0':'exitN'}">exit ${r.code}</span>` +
-               ((r.files&&r.files.length) ? ` <span class="sub">· files: ${r.files.map(f=>esc(f.name)+" ("+f.bytes+"b)").join(", ")}</span>` : "");
+      footer = `<span class="${r.code===0?'exit0':'exitN'}">exit ${r.code}</span>`;
+
+    // Retained output is evidence, so it is worth opening, not just counting.
+    const filerow = (!busy && r && r.run && r.files && r.files.length)
+      ? `<div class="runfiles">${r.files.map(f=>
+          `<a href="/projects/${proj.id}/runs/${encodeURIComponent(r.run)}/files/${
+             f.name.split("/").map(encodeURIComponent).join("/")}" target="_blank"
+             rel="noopener">${esc(f.name)}</a><span class="sub">${bytes(f.bytes)}</span>`
+        ).join("")}</div>`
+      : "";
 
     const runPane = `
       <div class="runbox">
-        <div class="lbl"><span>command</span><span class="sub">runs inside ${esc(t.image)}</span></div>
+        <div class="lbl"><span>command</span>
+          <span class="sub">
+            ${overridden ? `<span class="pill">edited</span>
+              <span style="cursor:pointer;color:var(--accent)"
+                    onclick="resetCommand('${t.id}')">use default</span> · ` : ""}
+            ${editing ? `<span style="cursor:pointer;color:var(--accent)"
+                    onclick="saveCommand('${t.id}')">save</span> ·
+              <span style="cursor:pointer" onclick="cancelCommand('${t.id}')">cancel</span>`
+              : `<span style="cursor:pointer;color:var(--accent)"
+                    onclick="editCommand('${t.id}')">edit</span>`} ·
+            runs inside ${esc(t.image)}</span></div>
         <div class="fields">
-          <input id="cmd-${t.id}" value="${esc(t.last_command||"")}" placeholder="${esc(hint)}"
+          <input id="cmd-${t.id}" value="${esc(prefill)}" placeholder="${esc(hint)}"
+                 ${editing ? "" : "readonly"}
                  oninput="syncInputBox('${t.id}')"
-                 onkeydown="if(event.key==='Enter')doRun('${t.id}')">
+                 onkeydown="if(event.key==='Enter')${editing?`saveCommand('${t.id}')`:`doRun('${t.id}')`}">
           ${busy
             ? `<button class="stop" onclick="doStop('${t.id}')">Stop</button>`
             : `<button onclick="doRun('${t.id}')">Run</button>`}
         </div>
-        <div id="inwrap-${t.id}" class="inwrap" ${/\{\{input\}\}/.test(t.last_command||"")?"":"hidden"}>
-          <div class="lbl" style="margin-top:10px"><span>input list</span>
-            <span class="sub" id="incount-${t.id}"></span></div>
-          <textarea id="in-${t.id}" rows="4" spellcheck="false"
-            oninput="countInput('${t.id}')"
-            placeholder="one per line — written to a file the tool reads as {{input}}"
-            >${esc(inbox.get(t.id)||"")}</textarea>
-        </div>
+        ${(()=>{
+          const wantsInput = /\{\{input\}\}/.test(prefill || tmpl);
+          if(!wantsInput) return "";
+          // Auto-filled from the map the first time, so the normal path is
+          // "check this looks right, hit Run" — not a paste.
+          const mi = mapInput(t.id);
+          if(!inbox.has(t.id) && mi.vals.length) inbox.set(t.id, mi.vals.join("\n"));
+          const val = inbox.get(t.id) || "";
+          const n = val.split("\n").filter(l=>l.trim()).length;
+          const editing = inEdit.has(t.id);
+          const label = n
+            ? `<b>${n}</b> ${mi.kind||"target"}${n===1?"":"s"} from the map`
+            : `<span class="exitN">nothing on the map to scan yet</span>`;
+          return `<div class="inwrap">
+            <div class="lbl" style="margin-top:10px"><span>will scan</span>
+              <span class="sub">
+                ${mi.vals.length && mi.vals.length !== n
+                  ? `<span style="cursor:pointer;color:var(--accent)"
+                       onclick="fillFromMap('${t.id}')">refresh to ${mi.vals.length}</span> · `
+                  : ""}
+                <span style="cursor:pointer;color:var(--accent)"
+                      onclick="toggleInEdit('${t.id}')">${editing?"done":"review / edit"}</span>
+              </span>
+            </div>
+            <div class="sub">${label}${n && !editing
+              ? ` — <code>${esc(val.split("\n").slice(0,3).join(", "))}${
+                  n>3?`, +${n-3} more`:""}</code>` : ""}</div>
+            <textarea id="in-${t.id}" rows="6" spellcheck="false" ${editing?"":"hidden"}
+              oninput="countInput('${t.id}')"
+              placeholder="one per line">${esc(val)}</textarea>
+          </div>`;})()}
         <div class="split">
           <div>
             <div class="lbl" style="margin-top:10px"><span>output</span>${footer}</div>
             <pre class="term" id="run-${t.id}">${ansiToHtml(clip(runout.get(t.id)))}</pre>
+            ${filerow}
             <div id="promote-${t.id}" class="promote"></div>
           </div>
           <div>
@@ -746,13 +882,14 @@ function render(){
     return `<div class="card">
       <div class="top" ${mode === "manage" ? `onclick="toggle('${t.id}')"`
                                            : 'style="cursor:default"'}>
-        <div><span class="nm">${esc(t.id)}</span>${detail}</div>
+        <div><span class="nm">${esc(t.id)}</span>
+          ${t.purpose ? `<div class="sub">${esc(t.purpose)}</div>` : detail}</div>
         <div class="right">${badge}${actions}
           ${mode === "manage"
             ? `<button class="ghost" title="Uninstall the image everywhere"
                  onclick="event.stopPropagation();drop('${t.id}')">✕</button>`
             : `<button class="ghost" title="Remove from this section (keeps the image)"
-                 onclick="event.stopPropagation();unassign('${t.id}')">⊖</button>`}</div>
+                 onclick="event.stopPropagation();unassign('${t.id}','${sect||""}')">⊖</button>`}</div>
       </div>${bodyHtml}</div>`;
   };
 
@@ -769,19 +906,23 @@ function render(){
       : '<div class="empty">Nothing added yet.</div>';
     return;
   }
+  if(view === "map"){ renderMap(card); return; }
+
+  // A phase shows only what you added — the baseline is under Map.
   const el = document.getElementById("list");
-  const list = toolsIn(view);
+  const list = toolsIn(view).filter(t=>!t.baseline);
   // Everything installed that this section does not already have. Assigning is
   // instant — the image is shared, so there is nothing to build.
   const here = new Set(list.map(t=>t.id));
-  const spare = [...tools.values()].filter(t=>!here.has(t.id) && t.status==="ready");
+  const spare = [...tools.values()].filter(
+    t=>!here.has(t.id) && t.status==="ready" && !t.baseline);
   const picker = `<div class="card" style="padding:10px 12px;margin-bottom:10px">
       <div class="addrow">
-        <select id="pick" style="flex:1">
+        <select id="pick-${view}" style="flex:1">
           <option value="">＋ add an installed tool…</option>
           ${spare.map(t=>`<option value="${t.id}">${esc(t.id)}</option>`).join("")}
         </select>
-        <button onclick="assignTool()" ${spare.length?"":"disabled"}>Add</button>
+        <button onclick="assignTool('${view}')" ${spare.length?"":"disabled"}>Add</button>
       </div>
       ${spare.length ? "" : `<div class="sub" style="margin-top:6px">
         Everything installed is already here — install more under
@@ -789,7 +930,7 @@ function render(){
       </div>`}
     </div>`;
   el.innerHTML = picker + (list.length
-    ? list.map(t=>card(t,"run")).join("")
+    ? list.map(t=>card(t,"run",view)).join("")
     : `<div class="empty">Nothing in ${SECTION_LABEL.get(view)} yet.</div>`);
   // keep logs scrolled to the newest line
   tools.forEach((t,id)=>{ const p=document.getElementById("log-"+id); if(p) p.scrollTop=p.scrollHeight; });
@@ -816,7 +957,7 @@ async function offerPromote(toolId, runId){
   }catch(e){ box.innerHTML = ""; return; }
   if(!d.total){ box.innerHTML = `<div class="sub">nothing recognisable to promote</div>`; return; }
 
-  promoteRows.set(toolId, {rows:d.rows, run:runId});
+  promoteRows.set(toolId, {rows:d.rows, run:runId, edges:d.edges||[]});
   const news = d.rows.filter(r=>!r.known);
   const oos  = news.filter(r=>!r.in_scope).length;
 
@@ -835,16 +976,59 @@ async function offerPromote(toolId, runId){
         </label>`).join("")}</div>
       <div class="fields" style="margin-top:8px">
         <button onclick="commitPromote('${toolId}')">Add selected</button>
-        ${sendToPicker(toolId, d.total)}
+        <button class="ghost" onclick="commitPromote('${toolId}', true)"
+          title="${oos ? `Includes ${oos} outside scope` : "Every new row"}"
+          >Add all ${news.length}</button>
         <span class="sub" id="promsg-${toolId}"></span>
       </div>`
-    : `<div class="sub">all ${d.total} already on the map
-         ${sendToPicker(toolId, d.total)}</div>`}`;
+    : `<div class="sub">all ${d.total} already on the map</div>`}`;
   promoteNew.set(toolId, news);
 }
 
-// Pasted input lists, kept per tool so switching views doesn't lose them.
+// Input lists per tool. For a tool that declares what it consumes these are
+// filled from the map automatically — you confirm what is about to be scanned
+// rather than copying it in by hand.
 const inbox = new Map();
+const inEdit = new Set();      // tools whose list you opened to change
+const cmdEdit = new Set();     // tools whose command you opened to change
+
+function editCommand(id){ cmdEdit.add(id); render();
+  const el = document.getElementById("cmd-"+id); if(el){ el.focus(); el.select(); } }
+function cancelCommand(id){ cmdEdit.delete(id); render(); }
+
+// Empty saves as "no override", which is how you get the generated command back.
+async function saveCommand(id){
+  const el = document.getElementById("cmd-"+id);
+  const cmd = (el ? el.value : "").trim();
+  const d = await (await fetch(`/tools/${id}/command`,{method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({command: cmd})})).json();
+  if(d.error){ const e = document.getElementById("err"); if(e) e.textContent = d.error;
+               return; }
+  const t = tools.get(id);
+  if(t) t.command_override = d.command_override;
+  cmdEdit.delete(id);
+  render();
+}
+
+function resetCommand(id){
+  const el = document.getElementById("cmd-"+id);
+  if(el) el.value = "";
+  cmdEdit.delete(id);
+  fetch(`/tools/${id}/command`,{method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({command:""})}).then(async r=>{
+      const d = await r.json();
+      const t = tools.get(id);
+      if(t) t.command_override = "";
+      render();
+    });
+}
+
+function toggleInEdit(id){
+  inEdit.has(id) ? inEdit.delete(id) : inEdit.add(id);
+  render();
+}
 
 // The box only appears when the command actually references {{input}} —
 // otherwise it is a text area that does nothing, which invites confusion.
@@ -853,6 +1037,35 @@ function syncInputBox(id){
   const wrap = document.getElementById("inwrap-"+id);
   if(wrap) wrap.hidden = !/\{\{input\}\}/.test(cmd);
 }
+// Fill a tool's input from the map, using the kinds it declares it consumes.
+// The map holds the scope roots *and* everything discovered since, so this is
+// how one step's output becomes the next step's input: bbot finds subdomains,
+// dig eats every domain on the map, nmap eats the hosts dig resolved.
+// Whatever is on the map, of the kinds this tool consumes. Deliberately no scope
+// filtering here: scope is decided once, when you promote output onto the map,
+// where the rows are flagged and out-of-scope ones start unchecked. A node that
+// made it past that is one you chose to put there, so re-judging it at input time
+// would only second-guess a decision you already made — and quietly change what
+// gets scanned relative to what the map plainly shows.
+function mapInput(id){
+  const t = tools.get(id);
+  const kinds = (t && t.consumes) || [];
+  const nodes = Object.values(mapData.nodes||{}).filter(n=>!n.dismissed);
+  for(const kind of kinds){                 // first kind that has anything
+    const vals = nodes.filter(n=>n.kind===kind).map(n=>n.value);
+    if(vals.length) return {kind, vals};
+  }
+  return {kind: kinds[0]||"", vals: []};
+}
+
+// Re-sync a tool's list with the map, discarding edits. Used when a later run
+// has added nodes and you want the current set rather than the one captured
+// when the card first rendered.
+function fillFromMap(id){
+  inbox.set(id, mapInput(id).vals.join("\n"));
+  render();
+}
+
 function countInput(id){
   const box = document.getElementById("in-"+id);
   if(!box) return;
@@ -862,52 +1075,36 @@ function countInput(id){
   if(el) el.textContent = n ? `${n} line${n===1?"":"s"}` : "";
 }
 
-// Hand this run's output to another tool's input box. The whole point of the
-// chain: bbot's subdomains become httpx's list, and you see and edit what
-// moves between steps rather than it happening invisibly.
-// Every other ready tool in this engagement is a possible next step.
-function sendToPicker(fromId, count){
-  const targets = [...tools.values()].filter(t=>t.id!==fromId && t.status==="ready");
-  if(!targets.length) return "";
-  return `<select onchange="if(this.value){sendTo('${fromId}',this.value);this.value='';}"
-            style="max-width:210px">
-      <option value="">send ${count} lines to →</option>
-      ${targets.map(t=>`<option value="${t.id}">${esc(t.id)}</option>`).join("")}
-    </select>`;
-}
-
-function sendTo(fromId, toId){
-  const rows = (promoteRows.get(fromId)||{}).rows || [];
-  const lines = rows.length
-    ? rows.map(r=>r.line)
-    : (runout.get(fromId)||"").split("\n").filter(l=>l.trim());
-  inbox.set(toId, lines.join("\n"));
-  const t = tools.get(toId);
-  if(t && !/\{\{input\}\}/.test(t.last_command||"")){
-    // Give them a command that will actually consume it.
-    t.last_command = `${toId} -l {{input}}`;
-  }
-  open.add(toId);
-  render();
-  const box = document.getElementById("in-"+toId);
-  if(box){ box.scrollIntoView({block:"center"}); countInput(toId); }
-}
-
 const promoteRows = new Map();
 const promoteNew  = new Map();
 
-async function commitPromote(toolId){
+// `all` takes every new row regardless of the checkboxes — including the
+// out-of-scope ones, which are deliberately left unchecked. That is the point of
+// having both buttons: "Add selected" respects the in-scope default, "Add all"
+// is how you take affiliate infrastructure (a client's mail provider, say) onto
+// the map on purpose. Out-of-scope nodes are recorded, tagged and never scanned.
+async function commitPromote(toolId, all){
   const box = document.getElementById(`promote-${toolId}`);
   const msg = document.getElementById(`promsg-${toolId}`);
   const news = promoteNew.get(toolId) || [];
-  const picked = [...box.querySelectorAll("input[type=checkbox]")]
-    .filter(c=>c.checked).map(c=>news[+c.dataset.i]).filter(Boolean);
+  const picked = all
+    ? news.slice()
+    : [...box.querySelectorAll("input[type=checkbox]")]
+        .filter(c=>c.checked).map(c=>news[+c.dataset.i]).filter(Boolean);
   if(!picked.length){ msg.textContent = "nothing selected"; return; }
   msg.textContent = "adding…";
+  // Only relations whose both ends are being added. Promote half a resolution and
+  // you get the half you asked for, not a dangling edge.
+  const st = promoteRows.get(toolId);
+  const ids = new Set(picked.map(r=>r.id));
+  const keptEdges = (st.edges||[]).filter(e=>ids.has(e.frm) && ids.has(e.to));
   const d = await (await fetch(`/projects/${proj.id}/map`,{method:"POST",
     headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({run: promoteRows.get(toolId).run, rows: picked})})).json();
-  msg.textContent = `added ${d.added} to the map`;
+    body:JSON.stringify({run: st.run, rows: picked, edges: keptEdges})})).json();
+  const oos = picked.filter(r=>!r.in_scope).length;
+  msg.textContent = `added ${d.added} to the map`
+    + (d.linked ? ` · ${d.linked} links` : "")
+    + (oos ? ` · ${oos} outside scope` : "");
   box.querySelectorAll(".promoterows").forEach(e=>e.remove());
   loadMap();
 }
@@ -922,60 +1119,94 @@ async function loadMap(){
     mapData = await (await fetch(`/projects/${proj.id}/map`)).json();
   }catch(e){ mapData = {nodes:{}, edges:{}}; }
   mapCount = Object.values(mapData.nodes||{}).filter(n=>!n.dismissed).length;
-  renderMap(); renderNav();
+  render();
 }
 
-// Grouped by kind rather than drawn as a tree. The graph is the truth, but a
-// flat list per kind stays readable at 500 domains where a nested tree would
-// not — and every node shows what it connects to, so the structure is still
-// visible without paying for it in rendering.
-function renderMap(){
+function renderMap(card){
   const el = document.getElementById("v-map");
   const nodes = Object.values(mapData.nodes||{});
   const shown = nodes.filter(n=>showDismissed || !n.dismissed);
   const edges = Object.values(mapData.edges||{});
-  const dismissedCount = nodes.length - nodes.filter(n=>!n.dismissed).length;
 
-  if(!nodes.length){
-    el.innerHTML = `<h2>Map</h2><div class="empty">
-      Nothing on the map yet. Run a tool and promote its output.</div>`;
-    return;
-  }
+  const scopeN = shown.filter(n=>n.kind==="domain" &&
+                                (n.tags||[]).includes("scope")).length;
+  const foundN = shown.filter(n=>n.kind==="domain" &&
+                                !(n.tags||[]).includes("scope")).length;
+  const counts = [`<span class="gcount"><b>${scopeN}</b> in scope</span>`,
+                  `<span class="gcount"><b>${foundN}</b> subdomains found</span>`]
+    .concat(KIND_ORDER.filter(k=>k!=="domain").map(k=>{
+      const n = shown.filter(x=>x.kind===k).length;
+      return `<span class="gcount"><b>${n}</b> ${KIND_LABEL[k].toLowerCase()}</span>`;
+    })).join("");
 
-  // What each node points at, so a row can show its connections.
   const outs = new Map();
-  edges.forEach(e=>{
-    if(!outs.has(e.frm)) outs.set(e.frm, []);
-    outs.get(e.frm).push(e);
-  });
+  edges.forEach(e=>{ if(!outs.has(e.frm)) outs.set(e.frm,[]); outs.get(e.frm).push(e); });
 
-  const groups = KIND_ORDER.map(kind=>{
-    const mine = shown.filter(n=>n.kind===kind);
+  const isScope = n => (n.tags||[]).includes("scope");
+  const groupDefs = [
+    ["Scope",     n=>n.kind==="domain" && isScope(n)],
+    ["Subdomains found", n=>n.kind==="domain" && !isScope(n)],
+    ...KIND_ORDER.filter(k=>k!=="domain").map(k=>[KIND_LABEL[k], n=>n.kind===k]),
+  ];
+
+  const groups = groupDefs.map(([label, pred])=>{
+    const mine = shown.filter(pred);
     if(!mine.length) return "";
-    return `<div class="secthead">${KIND_LABEL[kind]}
+    return `<div class="mapgroup"><div class="mapkind">${label}
         <span class="sub">${mine.length}</span></div>
-      <table class="hist">${mine.map(n=>{
+      ${mine.map(n=>{
         const links = (outs.get(n.id)||[]).length;
         const conflict = Object.values(n.attrs||{}).some(v=>
-          new Set(v.map(x=>x.value)).size > 1);
-        const tools = [...new Set((n.sources||[]).map(s=>s.tool))].join(", ");
-        return `<tr class="${n.dismissed?'dim':''}" onclick="showNode('${esc(n.id)}')">
-          <td><code>${esc(n.value)}</code>${n.dismissed?' <span class="sub">dismissed</span>':''}</td>
-          <td class="sub">${tools||"manual"}</td>
-          <td class="sub">${links?links+" links":""}</td>
-          <td class="sub">${conflict?'<span class="exitN">conflict</span>':''}</td>
-        </tr>`;}).join("")}</table>`;
+          new Set(v.map(x=>x.value)).size>1);
+        return `<div class="mapnode ${n.dismissed?'dim':''}"
+             onclick="showNode('${esc(n.id)}')">
+          <code>${esc(n.value)}</code>
+          ${(n.tags||[]).includes("scope") ? '<span class="pill">scope</span>':''}
+          ${links?`<span class="sub">${links} links</span>`:''}
+          ${conflict?'<span class="exitN sub">conflict</span>':''}
+        </div>`;}).join("")}</div>`;
   }).join("");
 
-  el.innerHTML = `<h2 style="display:flex;justify-content:space-between;align-items:baseline">
+  const mapTop = `
+    <h2 style="display:flex;justify-content:space-between;align-items:baseline">
       <span>Map</span>
-      <span class="sub">${shown.length} nodes · ${edges.length} links
-        ${dismissedCount ? `· <span style="cursor:pointer;color:var(--accent)"
-          onclick="showDismissed=!showDismissed;renderMap()">
-          ${showDismissed?"hide":"show"} ${dismissedCount} dismissed</span>` : ""}</span>
-    </h2>
-    <div id="nodedetail"></div>
-    ${groups}`;
+      <span class="sub">${shown.length} nodes · ${edges.length} links</span></h2>
+    <div class="card" style="padding:12px;margin-bottom:6px">
+      <div class="sub" style="margin-bottom:8px">
+        ${proj && proj.scope ? `scope <code>${esc(proj.scope)}</code>`
+          : `<span class="exitN">no scope set</span> —
+             <a style="color:var(--accent);cursor:pointer"
+                onclick="setView('project')">add it under Project</a>`}
+      </div>
+      <div>${counts}</div>
+      <div id="nodedetail"></div>
+      ${nodes.length ? groups : `<div class="sub" style="margin-top:10px">
+        Nothing found yet. Run something below and promote its output.</div>`}
+    </div>`;
+
+  // The toolset, grouped by phase. This is where you work; the map above is
+  // what it fills in.
+  const baseline = [...tools.values()].filter(t=>t.baseline)
+    .sort((a,b)=>(a.baseline_order||0)-(b.baseline_order||0));
+  const installBar = baseline.length ? "" : `
+    <div class="card" style="padding:12px;margin-bottom:12px">
+      <div class="sub" style="margin-bottom:8px">
+        The baseline toolset for an external engagement isn't installed yet —
+        bbot for discovery, then dig, nmap, curl and openssl. Their output is
+        what fills in the map.</div>
+      <button onclick="installBaseline()">Install baseline</button>
+      <span class="sub" id="basemsg"></span>
+    </div>`;
+
+  // Flat and in workflow order: bbot discovers, dig resolves, nmap scans, curl
+  // and openssl fill in detail. The order is the methodology.
+  const toolset = baseline.length
+    ? `<div class="secthead">Baseline<span class="sub">${baseline.length}</span></div>`
+      + baseline.map(t=>card(t,"run","")).join("")
+    : "";
+
+  el.innerHTML = mapTop + installBar + toolset;
+
 }
 
 function showNode(id){
@@ -1146,7 +1377,22 @@ function renderSettings(){
       ${envLocked ? "" : `<span class="setedit" onclick="toggleSettings()">
         ${showSettings ? "hide" : "edit"}</span>`}
     </div>
-    ${panel}`;
+    ${panel}
+    <h2 style="margin-top:28px;color:var(--red)">Danger zone</h2>
+    <div class="card" style="padding:14px;border-color:var(--red)">
+      <div class="sub" style="margin-bottom:10px">
+        <b>Remove every installed tool.</b> Deletes all ${tools.size} tool
+        record${tools.size===1?"":"s"}, their Docker images, their per-tool
+        volumes and the cached repo data. Baseline tools rebuild on the next
+        start; anything you added yourself has to be re-added. Cannot be undone.
+      </div>
+      <div class="addrow">
+        <input id="clearword" placeholder='type "delete" to confirm'
+               onkeydown="if(event.key==='Enter')clearAll()" style="max-width:220px">
+        <button onclick="clearAll()" style="background:var(--red)">Remove all tools</button>
+        <span class="sub" id="clearmsg"></span>
+      </div>
+    </div>`;
 
   // gate the Add button on having a token
   const btn = document.getElementById("addbtn");
@@ -1189,7 +1435,7 @@ fetch("/tools").then(r=>r.json()).then(d=>{
 });
 // Projects first: the sidebar, section lists and run scoping all depend on
 // knowing which engagement is selected.
-loadProjects().then(()=>{ render(); connect(); });
+loadProjects().then(()=>{ render(); loadMap(); connect(); });
 loadSettings();
 </script>
 </body>

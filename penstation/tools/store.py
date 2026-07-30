@@ -47,8 +47,18 @@ class ToolRecord:
     manual_install: str = ""     # install command you supplied when the ladder found none
     manual_dockerfile: str = ""  # a whole Dockerfile you supplied instead
     tried: list = field(default_factory=list)   # recipe notes, for the handoff prompt
+    baseline: bool = False       # part of an engagement type's baseline toolset
+    check: str = ""              # coverage kind this tool satisfies (portscan, resolve…)
+    purpose: str = ""            # why it is in the baseline
+    baseline_order: int = 0      # position in the baseline workflow
+    consumes: list = field(default_factory=list)   # map node kinds it takes as input
+    result_file: str = ""        # basename of the output file holding its results;
+                                 # when set, promotion reads only that file rather
+                                 # than sweeping every log the tool wrote
     run_template: str = ""       # extracted hint — shown as the input's placeholder
-    last_command: str = ""       # what you last typed; pre-fills the run box
+    last_command: str = ""       # what you last ran, for history only
+    command_override: str = ""   # your edit, if you made one; clears back to
+                                 # the generated default when emptied
     argv_mode: str = ""          # entrypoint | argv (set at verify)
     entrypoint: str = ""         # image ENTRYPOINT basename, for arg-stripping
     help_text: str = ""          # captured --help, shown beside the run box

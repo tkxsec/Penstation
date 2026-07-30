@@ -6,6 +6,7 @@
     GET  /tools/{id}/log      full setup log (for reload)
     GET  /events              SSE: status transitions + live build log lines
     GET  /tools/{id}/prompt   a ready-to-paste prompt describing the failure
+    POST /tools/{id}/command  save or clear a command override
     POST /tools/{id}/install  supply the recipe yourself when none could be derived
     GET  /projects            engagements + their section/tool assignments
     POST /projects            create one
@@ -26,7 +27,7 @@ from pathlib import Path
 
 # app shell
 from penstation import map as gmap
-from penstation import projects, runs, scope, settings
+from penstation import engagements, projects, runs, scope, settings
 from penstation.events import bus
 
 # the add-a-tool feature
@@ -190,6 +191,63 @@ def _settings_state() -> dict:
             }
 
 
+def ensure_baseline(kind: str = "") -> dict:
+    """Make sure every engagement type's baseline exists in the library.
+
+    Images are global, so this builds each baseline tool **once ever** — not
+    once per engagement. Called at startup so cloning the repo and starting the
+    server is all it takes; a project created later just points at what is
+    already built.
+    """
+    queued, reused = [], []
+    kinds = [kind] if kind else list(engagements.TYPES)
+    for k in kinds:
+        for order, entry in enumerate(
+                getattr(engagements.TYPES.get(k), "BACKBONE", [])):
+            tid = entry["id"]
+            rec = store.load(tid)
+            if rec is None:
+                rec = store.create(entry.get("source", ""), entry["section"], tid)
+                rec.manual_dockerfile = entry["dockerfile"]
+                rec.run_template = entry.get("run", "")
+                rec.baseline, rec.check = True, entry.get("check", "")
+                rec.purpose = entry.get("purpose", "")
+                rec.baseline_order = order
+                rec.consumes = list(entry.get("consumes") or [])
+                rec.result_file = entry.get("result_file", "")
+                rec.save()
+                queue.submit(rec)
+                queued.append(tid)
+            else:
+                rec.baseline = True
+                rec.baseline_order = order
+                rec.consumes = list(entry.get("consumes") or [])
+                rec.result_file = entry.get("result_file", "")
+                rec.check = entry.get("check", "")
+                rec.purpose = entry.get("purpose", "")
+                rec.run_template = entry.get("run", "")
+                rec.save()
+                reused.append(tid)
+    return {"queued": queued, "reused": reused}
+
+
+def unassign_baseline(proj) -> int:
+    """Take baseline tools out of a project's phases.
+
+    The baseline belongs to the Map — it is the workflow that builds it — while
+    the phases hold the tools you added yourself. Leaving it in both meant one
+    tool with two cards, two input boxes and two output panes.
+    """
+    n = 0
+    for entry in getattr(engagements.TYPES.get(proj.kind), "BACKBONE", []):
+        for section in list(proj.sections):
+            if proj.unassign(section, entry["id"]):
+                n += 1
+    if n:
+        proj.save()
+    return n
+
+
 async def _add_tool(payload: dict) -> dict:
     # A token is required: unauthenticated GitHub is 60 req/hour and trips abuse
     # detection, which can get the whole IP dropped. Refuse rather than burn it.
@@ -339,8 +397,7 @@ def make_handler():
                     writer.write(_ok({"error": validate_input(
                         _json_body(body).get("input") or "").reason}))
                 else:
-                    # Remember the command so the box is pre-filled next time.
-                    rec.last_command = command
+                    rec.last_command = command      # history only
                     rec.save()
                     p = _json_body(body)
                     proj = (projects.load((p.get("project") or "").strip())
@@ -349,6 +406,25 @@ def make_handler():
                                                 (p.get("section") or "").strip(),
                                                 p.get("input") or ""))
                     writer.write(_ok({"ok": True}))
+
+            elif (method == "POST" and len(parts) == 3
+                  and parts[0] == "tools" and parts[2] == "command"):
+                # Save an override, or clear it to fall back to the generated
+                # command. Keeping these separate means improving a baseline
+                # command reaches every project instead of being shadowed
+                # forever by whatever was typed once.
+                rec = store.load(parts[1])
+                cmd = (_json_body(body).get("command") or "").strip()
+                if rec is None:
+                    writer.write(_ok({"error": "unknown tool"}))
+                elif cmd and not validate_command(cmd):
+                    writer.write(_ok({"error": validate_command(cmd).reason}))
+                else:
+                    rec.command_override = cmd
+                    rec.save()
+                    bus.publish("status", rec.to_dict())
+                    writer.write(_ok({"command_override": cmd,
+                                      "using_default": not cmd}))
 
             elif method == "POST" and len(parts) == 3 and parts[0] == "tools" and parts[2] == "stop":
                 stopped = await runner.stop(parts[1])
@@ -404,6 +480,21 @@ def make_handler():
                 writer.write(_ok({"runs": [r.to_dict()
                                            for r in runs.for_tool(parts[1], parts[3])]}))
 
+            elif (method == "POST" and len(parts) == 3 and parts[0] == "projects"
+                  and parts[2] == "baseline"):
+                # Materialise the engagement type's baseline toolset. Images are
+                # shared, so a second project reuses whatever is already built.
+                proj = projects.load(parts[1])
+                if proj is None:
+                    writer.write(_ok({"error": "unknown project"}))
+                else:
+                    res = ensure_baseline(proj.kind)
+                    unassign_baseline(proj)
+                    out(_paint(f"baseline for {proj.id}: building "
+                               f"{res['queued'] or 'none'}, reusing "
+                               f"{res['reused'] or 'none'}", "green"))
+                    writer.write(_ok(res))
+
             elif (method == "GET" and len(parts) == 3 and parts[0] == "projects"
                   and parts[2] == "map"):
                 m = gmap.load(parts[1])
@@ -417,7 +508,49 @@ def make_handler():
                 text = p.get("text") or ""
                 run = runs.load(parts[1], (p.get("run") or "").strip() or "-")
                 if not text and run:
-                    text = run.output()
+                    rec = store.load(run.tool)
+                    want = (getattr(rec, "result_file", "") or "") if rec else ""
+                    # A tool that names the file holding its results gets read
+                    # there and nowhere else. Sweeping every log a scanner writes
+                    # is how a bbot run that correctly found no subdomains came
+                    # back offering Google's mail servers and a pip version string.
+                    picked = None
+                    if want:
+                        for f in (run.files or []):
+                            name = f.get("name", "")
+                            # bbot nests its output under a generated scan name, so
+                            # match the basename rather than the whole path.
+                            if name.rsplit("/", 1)[-1].lower() == want.lower():
+                                picked = run.file_path(name)
+                                break
+                    if picked:
+                        try:
+                            text = picked.read_text(errors="replace")
+                        except OSError:
+                            text = ""
+                    else:
+                        # No declared result file (or it wasn't produced): stdout
+                        # plus anything readable the run wrote. bbot's subdomains
+                        # are in its output files, not on stdout — reading only
+                        # stdout is why a real run reported nothing to promote.
+                        text = run.output()
+                        for f in (run.files or []):
+                            name = f.get("name", "")
+                            # A run's input is not its output. input.txt is the
+                            # target list fed in from the map and retained as
+                            # evidence; reading it back made every value a fresh
+                            # "discovery", so anything wrong on the map re-promoted
+                            # itself on the next run and could never be deleted.
+                            if name.rsplit("/", 1)[-1] == runner.INPUT_NAME:
+                                continue
+                            fp = run.file_path(name)
+                            if fp and fp.suffix.lower() in (
+                                    ".txt", ".csv", ".json", ".jsonl", ".ndjson",
+                                    ".xml", ".tsv", ".list", ""):
+                                try:
+                                    text += "\n" + fp.read_text(errors="replace")
+                                except OSError:
+                                    pass
                 found = gmap.classify_all(text)
                 m = gmap.load(parts[1])
                 proj = projects.load(parts[1])
@@ -434,6 +567,7 @@ def make_handler():
                                              if proj else True})
                 writer.write(_ok({"rows": rows, "kinds": found["kinds"],
                                   "uniform": found["uniform"],
+                                  "edges": found.get("edges") or [],
                                   "total": len(rows),
                                   "new": sum(1 for r in rows if not r["known"])}))
 
@@ -442,30 +576,44 @@ def make_handler():
                 # Commit the rows you confirmed.
                 p = _json_body(body)
                 rows = p.get("rows") or []
+                # Relations the tool itself reported — bbot's resolved_hosts says
+                # which address a name resolved to. Only applied between nodes you
+                # actually promoted, so unticking a row drops its edges with it.
+                want_edges = p.get("edges") or []
                 run_id = (p.get("run") or "").strip()
                 run = runs.load(parts[1], run_id) if run_id else None
                 tool = run.tool if run else "manual"
                 parent = (p.get("parent") or "").strip()
 
                 def commit(m):
-                    added = 0
+                    # Counted by how much the map grew, not by how many calls were
+                    # made: the same resolution appears on several events, and
+                    # reporting "36 links" when 34 landed is just wrong.
+                    added, before = 0, len(m.edges)
                     for r in rows:
                         kind, value = r.get("kind"), r.get("value") or r.get("line")
                         if kind not in gmap.KINDS or not value:
                             continue
                         extra = {"port": int(r["port"])} if r.get("port") else {}
+                        if kind == "finding" and r.get("on"):
+                            extra["on"] = r["on"]
                         node = m.add_node(kind, value, run=run_id, tool=tool, **extra)
                         if parent and parent in m.nodes:
                             m.link(parent, _REL.get(kind, "contains"), node.id,
                                    run=run_id, tool=tool)
                         added += 1
+                    for e in want_edges:
+                        frm, rel, to = e.get("frm"), e.get("rel"), e.get("to")
+                        if rel in gmap.RELATIONS and frm in m.nodes and to in m.nodes:
+                            m.link(frm, rel, to, run=run_id, tool=tool)
                     if parent and run and run.section:
                         m.mark_checked(parent, tool, run_id)
-                    return added
+                    return added, len(m.edges) - before
 
-                added = await gmap.mutate(parts[1], commit)
-                out(_paint(f"[map] {parts[1]}: +{added} node(s) from {tool}", "green"))
-                writer.write(_ok({"added": added}))
+                added, linked = await gmap.mutate(parts[1], commit)
+                out(_paint(f"[map] {parts[1]}: +{added} node(s), "
+                           f"+{linked} edge(s) from {tool}", "green"))
+                writer.write(_ok({"added": added, "linked": linked}))
 
             elif (method == "POST" and len(parts) == 4 and parts[0] == "projects"
                   and parts[2] == "map" and parts[3] == "undo"):
@@ -523,6 +671,9 @@ def make_handler():
                 else:
                     proj = projects.create(client, (p.get("scope") or "").strip(),
                                            (p.get("kind") or "external").strip())
+                    if proj.scope:
+                        await gmap.mutate(proj.id,
+                            lambda m: gmap.seed_from_scope(m, proj.scope))
                     out(_paint(f"project created: {proj.id} ({proj.kind})", "green"))
                     writer.write(_ok(proj.to_dict()))
 
@@ -541,7 +692,13 @@ def make_handler():
                     for f in ("client", "scope", "kind", "notes"):
                         if f in p:
                             setattr(proj, f, (p.get(f) or "").strip())
-                    writer.write(_ok(proj.save().to_dict()))
+                    proj.save()
+                    if "scope" in p and proj.scope:
+                        # Editing scope adds the new roots; it never removes
+                        # anything you have already found.
+                        await gmap.mutate(proj.id,
+                            lambda m: gmap.seed_from_scope(m, proj.scope))
+                    writer.write(_ok(proj.to_dict()))
 
             elif (len(parts) >= 4 and parts[0] == "projects" and parts[2] == "sections"
                   and method in ("POST", "DELETE")):
@@ -616,6 +773,12 @@ def make_handler():
 async def serve(host: str, port: int, mirror: bool = True) -> None:
     # A restart kills any in-flight build; don't leave those records spinning.
     projects.ensure_default()      # adopt pre-project tools on first run
+    base = ensure_baseline()       # build the baseline once, ever
+    if base["queued"]:
+        out(_paint(f"baseline: building {', '.join(base['queued'])} "
+                   "(first run only)", "yellow"))
+    for _p in projects.load_all():
+        unassign_baseline(_p)   # baseline lives under Map, not in the phases
     orphans = store.reap_orphans()
     if orphans:
         out(_paint(f"reset {len(orphans)} interrupted setup(s): "

@@ -49,6 +49,22 @@ class Pipeline:
 
     # -- 2. Inspect ----------------------------------------------------
     async def inspect(self, rec: ToolRecord) -> None:
+        # A baseline tool is a declared Dockerfile with no repository behind it —
+        # nmap and dig are distro packages, so there is nothing to inspect and
+        # gather would fail on an empty URL.
+        if rec.manual_dockerfile and not rec.source_url:
+            self._log(rec, f"$ baseline tool — using its declared Dockerfile\n")
+            for line in rec.manual_dockerfile.strip().splitlines():
+                self._log(rec, f"    | {line}\n")
+            self._plan[rec.id] = [Candidate(
+                "generated-dockerfile", rec.install_cmd or "(declared)",
+                dockerfile=rec.manual_dockerfile,
+                image=f"penstation/{rec.id}",
+                note="the baseline Dockerfile for this tool")]
+            self._adopt(rec, self._plan[rec.id][0])
+            rec.save()
+            return
+
         self._log(rec, f"$ inspect {rec.source_url}\n")
         try:
             sig = await asyncio.to_thread(G.gather, rec.source_url)
@@ -253,10 +269,11 @@ class Pipeline:
         self._log(rec, f"help: {len(rec.help_text)} chars\n" if rec.help_text
                   else "help: none captured (run `<tool> --help` yourself to see usage)\n")
 
-        # --help documents flags authoritatively, so prefer it over the README
-        # guess. Without this, a tool like bbot (which needs `-t`) yields a
-        # bare `bbot {{target}}` hint that teaches the wrong invocation.
-        if rec.help_text:
+        # A baseline tool's command is declared, not inferred — it encodes how
+        # the methodology uses the tool. Deriving one from --help replaced
+        # nmap's `-iL {{input}}` with `-iR {{target}}`, which scans *random*
+        # internet hosts.
+        if rec.help_text and not rec.baseline:
             flag = G.target_flag(rec.help_text)
             binary = rec.entrypoint or rec.id
             if flag:

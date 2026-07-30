@@ -51,6 +51,51 @@ class Project:
     def label(self) -> str:
         return self.client or self.id
 
+    @property
+    def targets(self) -> list[str]:
+        """Every domain in scope, in the order written.
+
+        The engagement's scope is the basis for everything the baseline runs
+        against, so a scope naming three domains has to reach all three — using
+        only the first silently under-tested two of them.
+        """
+        from penstation import scope as scope_mod
+        out = []
+        for rule in scope_mod.parse(self.scope):
+            if "/" in rule:                       # a network, not a domain
+                continue
+            apex = rule.removeprefix("*.")
+            if apex and not apex.replace(".", "").isdigit() and apex not in out:
+                out.append(apex)
+        return out
+
+    @property
+    def networks(self) -> list[str]:
+        from penstation import scope as scope_mod
+        return [r for r in scope_mod.parse(self.scope) if "/" in r]
+
+    @property
+    def scope_all(self) -> list[str]:
+        """Everything in scope — domains and networks, in the order written.
+
+        For tools that accept both. bbot takes `-t acme.com 203.0.113.0/24` and
+        expands the CIDR itself, so restricting it to domains silently left the
+        network ranges untested.
+        """
+        from penstation import scope as scope_mod
+        out = []
+        for rule in scope_mod.parse(self.scope):
+            v = rule.removeprefix("*.")
+            if v and v not in out:
+                out.append(v)
+        return out
+
+    @property
+    def target(self) -> str:
+        """The primary target, for commands that take exactly one."""
+        t = self.targets
+        return t[0] if t else ""
+
     def tools_in(self, section: str) -> list[str]:
         return list(self.sections.get(section) or [])
 
@@ -79,6 +124,10 @@ class Project:
         d["label"] = self.label
         d["section_list"] = [{"key": k, "label": l} for k, l in sections_for(self.kind)]
         d["kind_label"] = engagements.label_for(self.kind)
+        d["target"] = self.target
+        d["targets"] = self.targets
+        d["networks"] = self.networks
+        d["scope_all"] = self.scope_all
         return d
 
     def save(self) -> "Project":

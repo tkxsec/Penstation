@@ -80,6 +80,15 @@ FORBIDDEN_PATTERNS = (
     (re.compile(r"/dev/tcp/"), "raw socket redirection"),
 )
 
+# Running a command is not installing one. `curl` and `wget` are banned from an
+# install command because `curl … | sh` is the classic fetch-and-execute — but a
+# run command *is* how you use curl, and blocking it stopped the baseline curl
+# tool from running at all. Pipes are already rejected separately, and a run has
+# no shell to expand into, so the fetch verbs are safe here.
+_INSTALL_ONLY = ("network fetch in an install command",)
+RUN_FORBIDDEN = tuple((pat, why) for pat, why in FORBIDDEN_PATTERNS
+                      if why not in _INSTALL_ONLY)
+
 MAX_LEN = 400
 
 
@@ -220,7 +229,7 @@ def validate_command(command: str) -> Result:
         if ch in t:
             return Result(False, f"{why} won't work here — the command runs "
                                  "directly in the container with no shell")
-    for pat, why in FORBIDDEN_PATTERNS:
+    for pat, why in RUN_FORBIDDEN:
         if pat.search(t):
             return Result(False, f"{why} won't work here — no shell is involved")
     return Result(True)

@@ -1,9 +1,30 @@
 # Secrets — never commit. Contains your GitHub token.
 data/settings.json
 
+# Engagement data — never commit.
+#
+# These hold client names, agreed scope, and the evidence from live scans against
+# a real client's infrastructure. That belongs to the engagement, not to the tool:
+# pushing it means publishing who you tested, what you were allowed to touch, and
+# what you found. Keep the code shareable and the findings local.
+#
+# Note: git has no trailing comments in this file — a `#` only starts a comment at
+# the beginning of a line, so "data/runs/  # scans" is a literal pattern matching
+# nothing. Each entry gets its own line, with the description above it.
+#
+# client, scope, notes, per-phase tooling
+data/projects/
+# commands run, full output, retained scan files
+data/runs/
+# the discovered graph — hosts, ports, findings
+data/map/
+
 # Local state
 data/tools/
 data/cache/
+
+# Keep the data directory itself so a fresh clone has somewhere to write.
+!data/.gitkeep
 
 __pycache__/
 *.pyc
