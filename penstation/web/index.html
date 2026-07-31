@@ -1405,6 +1405,11 @@ async function offerPromote(toolId, runId){
                        sel:new Set(), touched:new Set(),   // by row id, not index
                        msg:""});
   paintPromote(toolId);
+  // The classify lands after the render that followed the run, and the
+  // discovered column reads it — so without this the parse of the result file
+  // sits in memory with nothing on screen showing it. Once per finished run,
+  // not per output line.
+  render();
 }
 
 // What the classify said, re-read against the map as it is now. Status is not
@@ -2710,13 +2715,24 @@ function reconStream(t, pfx = "r"){
     .filter(n=>(n.sources || []).some(s=>s.run === runId))
     .map(n=>nodeLabel(n)).sort((a, b)=>a.localeCompare(b)) : [];
   const seen = reconSeen.has(t.id) ? [...reconSeen.get(t.id)] : null;
+  // What the run's declared result file actually contains, parsed server-side.
+  // This is the answer for any tool that writes its findings to a file and says
+  // nothing about them on stdout: bbot reports "Saved 5 subdomains to
+  // subdomains.txt" and never names one, so the stream carries no trace of the
+  // thing the scan was for. Same parse the promote box runs, same file the tool
+  // declared.
+  const pst = promote.get(t.id);
+  const parsed = (pst && pst.rows ? pst.rows : [])
+    .map(r => r.line || r.value).filter(Boolean);
   // An empty tally is not an answer. `mapped` is recorded for every tool the
   // sequence handled, including ones whose rows were all filtered out, and an
-  // empty array is truthy — so taking it on truthiness alone discarded both the
-  // map and the live stream and left the column blank under a scan that had
-  // just listed a dozen names. Length, not existence, decides which source wins.
+  // empty array is truthy — so choosing on truthiness discarded every source
+  // below it and left the column blank under a scan that had just found things.
+  // Length, not existence, decides which one wins.
   const live = (mapped && mapped.length) ? mapped
-             : (onMap.length ? onMap : seen);
+             : onMap.length ? onMap
+             : parsed.length ? parsed
+             : seen;
   const fromMap = !!(mapped && mapped.length) || onMap.length > 0;
   const found = live || [];
   const resolver = t.check === "resolve";
@@ -2758,6 +2774,10 @@ function paintRecon(id){
   // is, so it must not stop the repaint.
   if(recon && recon.mapped && (recon.mapped[id] || []).length) return;
   const found = [...(reconSeen.get(id) || [])];
+  // Nothing scraped from the stream is not a result. A tool that writes its
+  // findings to a file mentions none of them on stdout, so blanking the column
+  // here would wipe the parse that put them there.
+  if(!found.length) return;
   for(const pfx of ["r", "p"]){
     const col = document.getElementById(pfx + "found-" + id);
     if(col) col.textContent = found.join("\n");
