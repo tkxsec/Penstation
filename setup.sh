@@ -37,6 +37,17 @@ apt-get update -qq
 apt-get install -y --no-install-recommends \
     git curl ca-certificates golang pipx seclists python3-venv
 
+# bbot installs its own system dependencies at scan time, as root — and the
+# account a scan runs as has neither sudo nor a tty, so that attempt ends in an
+# EOFError on a password prompt before any module runs. Its one core dependency
+# is 7z, so provision it here and pass --no-deps at scan time.
+#
+# The package name has moved (p7zip-full -> 7zip on newer Debian), and a missing
+# 7z costs one bbot module rather than the install, so this must not be fatal.
+apt-get install -y --no-install-recommends 7zip 2>/dev/null \
+  || apt-get install -y --no-install-recommends p7zip-full 2>/dev/null \
+  || echo "  note: no 7z package found — bbot modules needing it will be skipped"
+
 say "2/7  unprivileged accounts"
 # Downloaded code never holds your access: one account installs, another runs.
 # nologin because neither is ever meant to be a shell you sit in.

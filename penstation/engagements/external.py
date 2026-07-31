@@ -65,7 +65,16 @@ BACKBONE = [
         # are all still on, because that is bbot's value.
         # -y skips the confirmation prompt. The runner closes stdin, so a scan
         # that asked for confirmation would stall rather than fail visibly.
-        "run": "bbot -t {{scope}} -p subdomain-enum "
+        #
+        # --no-deps because bbot installs its own *system* dependencies at scan
+        # time, as root: load_modules() calls depsinstaller.install(), which
+        # calls ensure_root(), which prompts for a sudo password. The run
+        # account has no sudo and no tty, so the scan died on an EOFError from
+        # getpass before a single module ran. Installing packages mid-scan is
+        # the wrong shape here regardless — setup.sh provisions the box, and a
+        # scan should not need root. The one core dependency (7z) is installed
+        # there instead.
+        "run": "bbot -t {{scope}} -p subdomain-enum --no-deps "
                "-em dnsbrute dnsbrute_mutations -y --json -o {{outdir}}",
         # The file that holds the answer to the question this command asks.
         #
