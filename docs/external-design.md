@@ -143,41 +143,36 @@ what you did.
 
 ## Running tools
 
-Tools run as subprocesses of the server. Three users, so code downloaded from the
-internet never holds your access — at install time or at run time:
+Tools run as subprocesses of the server, as whoever runs penstation — root on a
+provisioned engagement box.
 
-| user | runs | can read |
-|---|---|---|
-| `root` / your account | penstation itself | everything; owns `data/` at `700` |
-| `noprivuser-install` | install commands | not `data/`, not `~/.ssh` |
-| `noprivuser-run` | the tools themselves | only the run's scratch directory |
+### There were two unprivileged accounts here
 
-```bash
-useradd -m -s /usr/sbin/nologin noprivuser-install
-useradd -m -s /usr/sbin/nologin noprivuser-run
-chmod 700 data/
-```
+One installed, one ran, so downloaded code never held your access. They were
+removed. The reasoning is worth keeping, because the instinct to add them back is
+a good one and the answer is specific to this deployment.
 
-Where penstation runs unprivileged, a sudoers drop-in lets it step down without a
-prompt:
+What it cost was concrete, and every item is a real tool made worse:
 
-```
-<your account> ALL=(noprivuser-install) NOPASSWD: /usr/bin/pipx, /usr/bin/go, /usr/bin/git
-<your account> ALL=(noprivuser-run)     NOPASSWD: ALL
-```
+- a tool could not be **executed** by the account that had to run it, because
+  `useradd -m` makes a home `0700`
+- results could not be **written**, because `data/` is the thing the separation
+  existed to protect
+- **bbot** could not install module dependencies into a venv owned by someone
+  else, and asked for a sudo password no one was there to type
+- **nmap** could not use the `CAP_NET_RAW` its SYN scan needs
 
-Validate with `visudo -c` before logging out. A malformed sudoers file is the one
-change here that can lock you out of a box you cannot walk to.
+What it bought was thinner than it looks. penstation already runs as root on the
+same box. That box is provisioned for one engagement and destroyed after. The
+tools are pinned ones you chose, not arbitrary code. A malicious `subfinder` has
+the client network either way — the account it runs under does not change that.
 
-`apt` stays as root, by nature — and it is the rung that does not execute
+Keeping machinery that looks like a boundary without being one is worse than not
+having it, because it invites you to rely on it. If you need real isolation, the
+answer is a separate VM, not a second uid on the same host.
+
+`apt` still needs root by nature — and it remains the rung that does not execute
 repository code.
-
-### Why two users rather than one
-
-`noprivuser-install` protects installation. It does not protect execution: a
-package that behaves during `pip install` and misbehaves when invoked would
-otherwise run with penstation's own access to the map, the evidence and the
-network position. `noprivuser-run` closes that, and costs the same to build.
 
 ---
 
@@ -195,7 +190,7 @@ Everything above the execution layer:
 
 `validate.py` matters more here than it did. Behind a container it was
 defence-in-depth; on this box it is the barrier between a repository's README and
-a process running as `noprivuser-install`. Its rules are unchanged: an allowed
+a process running with your access. Its rules are unchanged: an allowed
 leading verb, no pipes or command substitution or redirection or privilege
 escalation, must reference the repository being installed, bounded length, no
 control characters.
@@ -213,32 +208,33 @@ control characters.
 | new | **reinstall all**, replaying every tool record onto a fresh box |
 | new | `{{wordlist:…}}` and `{{key:…}}`, resolved server-side like pace |
 
-### Two accounts, and what that costs
+### Three things a container used to handle
 
-The separation — one account installs, another runs — has two consequences a
-container had handled for free, and both showed up as permission errors that
-looked like something else.
+Each of these surfaced as an error that read like something else entirely.
 
-**Where tools live.** `useradd -m` makes a home `0700`, so a tool installed into
-`~noprivuser-install` cannot be *executed* by `noprivuser-run`: the failure is
-`Permission denied` on the binary, before the tool does anything. Installs
-therefore go to `/opt/penstation/{bin,pipx,tools}`, owned by the install account
-and mode `0755` — the installer writes, the runner executes, and the runner
-cannot modify what it runs. `GOBIN` and `PIPX_BIN_DIR` both point there; `GOPATH`
-stays in the install account's home because the module cache is wanted only at
-build time.
+**Where tools live.** Not an isolation question — a naming one. Our install path
+competes with the distro's, and the distro's is older: Kali ships its own `httpx`
+and `subfinder` in `/usr/bin`, several versions behind the pins. Resolving by
+PATH recorded `/usr/bin/subfinder` v2.6.0 for a recipe that had just installed
+v2.14.0, and would have scanned with it. Installs go to
+`/opt/penstation/{bin,pipx,tools}` and that is the first place looked, so what we
+installed wins over whatever happens to share its name. `GOBIN` and
+`PIPX_BIN_DIR` point there; `GOPATH` stays in the home directory because the
+module cache is wanted only at build time.
 
-**Where output lands.** `data/` is `0700` and penstation-owned, which is the
-point — tool code must not reach the map, the scope or the evidence. So a tool
-cannot write into a run's directory either. It writes to a scratch directory it
-owns, and penstation moves the results in afterwards. Opening `data/` to the run
-account would have been one chmod and would have given away the whole property.
+**Working directory.** A subprocess inherits penstation's, which is the checkout.
+Every spawn sets `cwd` explicitly instead, because what a tool does with the
+working directory is not ours to assume: bbot stats every target against it to
+decide whether the target names a file, and the Go toolchain chdirs in each
+`compile` it spawns. A run gets its own directory, which is also where a tool
+writing relative paths belongs.
 
-**Working directory.** A subprocess inherits penstation's, which on an engagement
-box is `/root/Penstation` — mode `0700`, unreachable by either account. Every
-spawn sets `cwd` explicitly. The Go toolchain chdirs in each `compile` it spawns,
-so this surfaced as hundreds of `chdir: permission denied` lines and an exit 1
-that read like a broken recipe.
+**Dependencies at scan time.** bbot resolves its own module dependencies when a
+scan starts — pip packages and apt packages both. That makes an engagement depend
+on PyPI and the Debian mirrors answering at the worst possible moment. It is run
+with `--no-deps`; its Python packages are declared in the tool spec's `inject`
+list and installed into its venv at setup, and its one system package comes from
+`setup.sh`. Everything is resolved before the first target is touched.
 
 The verification step keeps its rule: **"produced output within the timeout"**,
 never a bare exit code. Many tools exit non-zero on `--help`, print to stderr, or

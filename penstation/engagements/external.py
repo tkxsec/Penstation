@@ -66,14 +66,14 @@ BACKBONE = [
         # -y skips the confirmation prompt. The runner closes stdin, so a scan
         # that asked for confirmation would stall rather than fail visibly.
         #
-        # --no-deps because bbot installs its own *system* dependencies at scan
-        # time, as root: load_modules() calls depsinstaller.install(), which
-        # calls ensure_root(), which prompts for a sudo password. The run
-        # account has no sudo and no tty, so the scan died on an EOFError from
-        # getpass before a single module ran. Installing packages mid-scan is
-        # the wrong shape here regardless — setup.sh provisions the box, and a
-        # scan should not need root. The one core dependency (7z) is installed
-        # there instead.
+        # --no-deps because bbot installs its own dependencies at scan time:
+        # load_modules() calls depsinstaller.install(), which runs the bundled
+        # Ansible playbooks and apt-installs whatever they name. An engagement
+        # should not depend on PyPI and the Debian mirrors answering at that
+        # moment, and a scan is the wrong time to find out they did not. The
+        # Python packages are declared in `inject` below and the one system
+        # dependency (7z) comes from setup.sh, so both are resolved before the
+        # first target is touched.
         "run": "bbot -t {{scope}} -p subdomain-enum --no-deps "
                "-em dnsbrute dnsbrute_mutations -y --json -o {{outdir}}",
         # The file that holds the answer to the question this command asks.
@@ -98,11 +98,11 @@ BACKBONE = [
         # are all output).
         "output_files": ["output.*", "subdomains.txt"],
         # `inject` is the answer to bbot resolving module dependencies while it
-        # scans. baddns is a plain PyPI package — nothing about it needs
-        # privilege — but --no-deps disables Python and system dependencies
-        # alike, so baddns_direct failed to load with "No module named
-        # 'baddns'". Installed here it goes into bbot's own venv, as the
-        # unprivileged install account, at setup rather than mid-engagement.
+        # scans. --no-deps stops it installing software mid-engagement, but it
+        # disables Python and system dependencies alike, so baddns_direct failed
+        # to load with "No module named 'baddns'". Declared here, those packages
+        # go into bbot's own venv at setup — when a failure is something you can
+        # look at, rather than three modules into a client scan.
         #
         # Deliberately unpinned: bbot declares the version it wants per module
         # and we do not have that mapping here, so pip resolving against the

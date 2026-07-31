@@ -46,19 +46,13 @@ from penstation.tools.validate import (validate_command, validate_input,
 
 WEB = Path(__file__).parent / "web"
 
-# The unprivileged account installs step down to, so downloaded code never holds
-# penstation's own access. Found on the box rather than configured — setup.sh
-# creates it, and an environment variable you have to remember is one you can
-# forget, which would silently give a stranger's setup.py your access.
-RUN_AS_INSTALL = N.account("install")
-
 # Which rungs the ladder may use here. Everything on a box you provision and
 # destroy; `PENSTATION_RUNGS=apt` on hardware you do not own, so add-a-tool
 # resolves against the distro and never fetches from the internet.
 _RUNGS = [r.strip() for r in os.environ.get("PENSTATION_RUNGS", "").split(",") if r.strip()]
 
 # The Pipeline is fully deterministic — no model, no configuration beyond this.
-queue = JobQueue(Pipeline(install_user=RUN_AS_INSTALL, allowed_rungs=_RUNGS or None))
+queue = JobQueue(Pipeline(allowed_rungs=_RUNGS or None))
 
 
 # -- HTTP plumbing ----------------------------------------------------
@@ -473,11 +467,11 @@ async def _uninstall(rec) -> None:
         if rec.baseline:
             return
         if rec.strategy == "pipx":
-            await N.pipx_uninstall(rec.install_pkg or rec.id, on_line, RUN_AS_INSTALL)
+            await N.pipx_uninstall(rec.install_pkg or rec.id, on_line)
         elif rec.strategy in ("go-install", "release-binary") and rec.binary_path:
-            await N.remove_path(rec.binary_path, on_line, RUN_AS_INSTALL)
+            await N.remove_path(rec.binary_path, on_line)
         elif rec.strategy == "clone-venv" and rec.install_pkg:
-            await N.remove_path(rec.install_pkg, on_line, RUN_AS_INSTALL)
+            await N.remove_path(rec.install_pkg, on_line)
     except N.InstallError:
         pass          # the record still goes; a leftover binary is not a failure
 

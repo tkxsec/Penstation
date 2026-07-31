@@ -55,9 +55,10 @@ class ToolRecord:
     install_inject: list = field(default_factory=list)
                                  # extra packages to put *inside* this tool's
                                  # venv. bbot resolves some module dependencies
-                                 # at scan time, which needs privilege it does
-                                 # not have; declaring them installs them up
-                                 # front, unprivileged, and replays on reinstall
+                                 # at scan time, which makes an engagement
+                                 # depend on PyPI at the worst moment; declaring
+                                 # them installs them up front and replays on
+                                 # reinstall
     manual_install: str = ""     # install command you supplied when the ladder found none
     tried: list = field(default_factory=list)   # recipe notes, for the handoff prompt
     baseline: bool = False       # part of an engagement type's baseline toolset

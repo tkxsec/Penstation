@@ -8,9 +8,13 @@ Two details that matter:
   * The tool leads its **own process group**, so Stop can take the whole tree.
     nmap and bbot spawn helpers, and killing only the immediate child leaves a
     "stopped" scan still sending packets.
-  * It runs as an **unprivileged account**, not as penstation. A package that
-    behaves during install and misbehaves when invoked would otherwise hold the
-    access penstation has to the map, the evidence and the network.
+  * It starts in the run's **own directory**, never penstation's. A tool is
+    entitled to do what it likes with the working directory — bbot stats every
+    target against it to decide whether the target names a file — and inheriting
+    an incidental one produces failures that have nothing to do with the scan.
+
+Tools run as whoever runs penstation. There was an unprivileged account here
+once; see nativeops for why it went.
 
 Nothing goes through a shell: the command is split with shlex and passed as argv.
 """
@@ -19,7 +23,6 @@ from __future__ import annotations
 import asyncio
 import os
 import shlex
-import shutil
 import signal
 import tempfile
 from pathlib import Path
@@ -34,16 +37,6 @@ OnLine = Callable[[str], None]
 DEFAULT_TIMEOUT = 1800.0     # 30 min — scanners legitimately run long
 INPUT_NAME = "input.txt"
 
-# The unprivileged account tools run as. Installing under one account and
-# running under another is the point: a package that behaves during install and
-# misbehaves when invoked would otherwise hold penstation's own access to the
-# map, the evidence and the network position.
-#
-# Resolved per call rather than at import, so a run picks up an account created
-# after the server started.
-def _run_user() -> str:
-    return N.account("run")
-
 # tool id -> pid of the running process group leader, for Stop
 _active: dict[str, int] = {}
 
@@ -54,35 +47,6 @@ class RunError(Exception):
 
 def is_running(tool_id: str) -> bool:
     return tool_id in _active
-
-
-def _grant(path: Path, user: str) -> None:
-    """Hand a scratch directory to the account the tool runs as.
-
-    No-op when there is no separate run account — then it is already ours.
-    """
-    if not user:
-        return
-    try:
-        import pwd                       # Unix only; absent on a dev box
-        info = pwd.getpwnam(user)
-    except (ImportError, KeyError):
-        return
-    for p in (path, *path.rglob("*")):
-        try:
-            os.chown(p, info.pw_uid, info.pw_gid)
-        except OSError:
-            pass                         # best effort; the run reports the real error
-
-
-def _harvest(scratch: Path, keep: Path) -> None:
-    """Move what the tool produced into the run's own directory.
-
-    Copied rather than handed over: the originals belong to the run account, and
-    what lands in data/ has to belong to penstation.
-    """
-    keep.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(scratch, keep, dirs_exist_ok=True)
 
 
 def build_argv(rec: ToolRecord, command: str,
@@ -96,13 +60,13 @@ def build_argv(rec: ToolRecord, command: str,
     become the input of the next.
 
     There is no mount and no path translation: the tool sees the same directory
-    the server does, which is the run's own scratch dir.
+    the server does, which is the run's own directory.
 
     The first token is replaced with the binary's resolved absolute path when we
-    have one. The server and the tool may run as different accounts with
-    different PATHs, so naming the file rather than trusting a lookup is what
-    makes the run reproducible — and what stops a same-named binary earlier on
-    someone's PATH being the thing that actually ran.
+    have one. Naming the file rather than trusting a lookup is what stops a
+    same-named binary earlier on PATH being the thing that actually ran — the
+    distro's `subfinder` and `httpx` are both several versions behind the ones
+    the baseline pins, and both are in /usr/bin.
     """
     # Split first, substitute second. shlex reads a backslash as an escape, so a
     # Windows path would lose its separators outright, and a path containing a
@@ -123,7 +87,7 @@ def build_argv(rec: ToolRecord, command: str,
 
     if rec.binary_path:
         parts[0] = rec.binary_path
-    return N.as_user(_run_user(), parts)
+    return parts
 
 
 async def run_command(rec: ToolRecord, command: str, on_line: OnLine,
@@ -146,39 +110,33 @@ async def run_command(rec: ToolRecord, command: str, on_line: OnLine,
         raise RunError(check.reason)
 
     # {{input}} lives in the same directory {{outdir}} names, so asking for
-    # either one gets you the directory.
-    #
-    # Always a scratch directory, even when the results are being kept. A tool
-    # runs as an unprivileged account and data/ is 0700 penstation-owned, so
-    # writing straight into the run's own directory is a permission error before
-    # the tool does anything — and opening data/ to the run account would hand
-    # tool code the map, the scope and the evidence, which is precisely what the
-    # second account exists to prevent. It writes where it owns; we move the
-    # results in afterwards.
+    # either one gets you the directory. The tool writes there directly — there
+    # is one account now, so nothing needs handing over afterwards.
     wants_dir = "{{outdir}}" in command or "{{input}}" in command
     scratch: tempfile.TemporaryDirectory | None = None
     outdir: Path | None = None
     if wants_dir:
-        scratch = tempfile.TemporaryDirectory(prefix="penstation-run-")
-        outdir = Path(scratch.name)
+        if outdir_keep is not None:
+            outdir_keep.mkdir(parents=True, exist_ok=True)
+            outdir = outdir_keep
+        else:
+            scratch = tempfile.TemporaryDirectory(prefix="penstation-run-")
+            outdir = Path(scratch.name)
 
     has_input = bool(input_text) and "{{input}}" in command
     if has_input and outdir is not None:
         (outdir / INPUT_NAME).write_text(
             input_text if input_text.endswith("\n") else input_text + "\n")
 
-    # After the input file is written, so the tool can read that too.
-    if outdir is not None:
-        _grant(outdir, _run_user())
-
     argv = build_argv(rec, command, outdir, has_input)
     on_line("$ " + " ".join(shlex.quote(a) for a in argv) + "\n")
 
-    # Never inherit penstation's own CWD. It is normally the checkout — on an
-    # engagement box /root/Penstation, mode 0700 — and the unprivileged account
-    # a tool runs as cannot chdir into it. The run's own directory is both
-    # reachable and where a tool writing relative paths should land anyway.
-    cwd = str(outdir) if outdir is not None else N.workdir(_run_user())
+    # Never inherit penstation's own CWD — normally the checkout. What a tool
+    # does with the working directory is not ours to assume: bbot stats every
+    # target against it to decide whether the target names a file, so a target
+    # that happens to match a filename beside the checkout changes the scan.
+    # The run's own directory is where a tool writing relative paths belongs.
+    cwd = str(outdir) if outdir is not None else N.workdir()
 
     try:
         try:
@@ -226,20 +184,14 @@ async def run_command(rec: ToolRecord, command: str, on_line: OnLine,
 
         files: list[dict] = []
         if outdir is not None:
-            # Take ownership of the results before listing them, so what the run
-            # reports is what actually survives in data/.
-            final = outdir
-            if outdir_keep is not None:
-                _harvest(outdir, outdir_keep)
-                final = outdir_keep
-            for p in sorted(final.rglob("*")):
+            for p in sorted(outdir.rglob("*")):
                 if p.is_file():
                     # Path relative to the run dir, so a screenshot in a
                     # subfolder is still addressable later. as_posix() because
                     # the name becomes a URL path: str() on Windows yields
                     # "scan_dir\output.json", which encodes to one %5C-laden
                     # segment the file route cannot resolve.
-                    files.append({"name": p.relative_to(final).as_posix(),
+                    files.append({"name": p.relative_to(outdir).as_posix(),
                                   "bytes": p.stat().st_size})
         return {"command": " ".join(shlex.quote(a) for a in argv),
                 "code": code, "files": files}

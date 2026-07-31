@@ -189,21 +189,20 @@ pipes, substitution, redirection or privilege escalation, must reference the rep
 being installed, bounded length, no control characters. Nothing reaches a shell —
 commands are built as argv.
 
-Without a container those rules are the barrier rather than a second one, so two
-unprivileged accounts carry the rest:
+Without a container those rules are the barrier rather than a second one.
 
-`setup.sh` creates both, and penstation finds them by name — nothing to
-configure, and nothing to forget:
+Tools run as whoever runs penstation. Two unprivileged accounts used to separate
+installing from running; they were removed because on a box provisioned for one
+engagement and destroyed after, they broke more than they protected — a tool the
+run account could not execute, results it could not write, bbot unable to reach
+its own venv, and nmap without the `CAP_NET_RAW` its SYN scan needs. penstation
+already runs as root on that host, so the separation was a boundary in appearance
+more than in effect. `docs/external-design.md` has the full reasoning. If you
+need real isolation, use a separate VM.
 
-| user | runs | can read |
-|---|---|---|
-| your account | penstation itself | everything; owns `data/` at `700` |
-| `noprivuser-install` | install commands | not `data/`, not `~/.ssh` |
-| `noprivuser-run` | the tools themselves | only the run's scratch directory |
-
-Downloaded code therefore never holds your access at install time *or* at run
-time. Tools are spawned in their own process group so Stop takes the whole tree —
-killing the immediate child leaves nmap's and bbot's helpers running.
+Tools are spawned in their own process group so Stop takes the whole tree —
+killing the immediate child leaves nmap's and bbot's helpers running — and always
+with an explicit working directory, never penstation's own.
 
 Service banners and certificate fields are attacker-controlled, so they are
 bounded and stripped of control characters before reaching the map, and the

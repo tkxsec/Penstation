@@ -4,16 +4,26 @@ Every command is built as an **argv list and run without a shell**, and all
 output is streamed line-by-line through `on_line` so a slow install is watchable
 rather than a blob at the end.
 
-Two properties matter, and both follow from there being no sandbox.
-
 **The validator is not defence in depth — it is the defence.** An install runs on
-the engagement box itself, so validate.py is the barrier rather than a second one
-behind something else. Nothing reaches a shell.
+the engagement box itself, as whoever runs penstation, so validate.py is the
+barrier rather than a second one behind something else. Nothing reaches a shell.
 
-**Installs run as another user.** `install_user` is an unprivileged account that
-cannot read the engagement data or your keys, so a package's setup.py never holds
-your access. apt is the exception — it needs root by nature, and it is also the
-one rung that does not execute a stranger's code to install itself.
+There were two unprivileged accounts here once: one installed, another ran. The
+idea was that downloaded code never held your access. It was removed, because on
+an engagement box it bought less than it cost.
+
+What it cost was concrete. A tool could not be executed by the account that had
+to run it, because `useradd -m` makes a home 0700. Results could not be written,
+because the data directory is the thing the separation existed to protect. bbot
+could not install its own module dependencies into a venv owned by someone else,
+and asked for a sudo password no one was there to type. nmap could not use the
+capability its SYN scan needs. Every one of those is a real tool made worse.
+
+What it bought was thinner than it looks: penstation already runs as root on the
+same box, that box is provisioned for one engagement and destroyed after, and the
+tools are pinned ones you chose. A malicious subfinder has the client network
+either way. The honest trade was to drop it rather than keep machinery that
+looked like a boundary without being one.
 """
 from __future__ import annotations
 
@@ -36,121 +46,59 @@ class InstallError(Exception):
     """An install command failed, or the tooling it needs is missing."""
 
 
-# -- who runs what -----------------------------------------------------
-# The unprivileged accounts setup.sh creates. Discovered rather than configured:
-# they either exist on this box or they do not, so asking the passwd database is
-# a better answer than an environment variable someone has to remember to set —
-# and forgetting it silently drops the separation these accounts exist to buy.
-INSTALL_ACCOUNT = "noprivuser-install"
-RUN_ACCOUNT = "noprivuser-run"
-
-
-def _exists(name: str) -> bool:
-    try:
-        import pwd                       # Unix only; absent on a dev box
-        pwd.getpwnam(name)
-        return True
-    except (ImportError, KeyError):
-        return False
-
-
-def account(kind: str) -> str:
-    """The account to install or run as: the env override, the standard account
-    if setup.sh made it, else empty — meaning "this user"."""
-    env = "PENSTATION_INSTALL_USER" if kind == "install" else "PENSTATION_RUN_USER"
-    override = os.environ.get(env)
-    if override is not None:            # set-but-empty deliberately means "me"
-        return override.strip()
-    standard = INSTALL_ACCOUNT if kind == "install" else RUN_ACCOUNT
-    return standard if _exists(standard) else ""
-
-
-def home_of(user: str = "") -> str:
-    """Home directory of the account a command will run as."""
-    return f"/home/{user}" if user else os.path.expanduser("~")
+def home_of() -> str:
+    """Home directory of the account everything runs as — ours."""
+    return os.path.expanduser("~")
 
 
 # -- where installed tools live ----------------------------------------
-# Installs land under a shared prefix, not in the install account's home.
+# One predictable prefix rather than scattered per-ecosystem defaults.
 #
-# The two accounts are the point: one installs, another runs. But `useradd -m`
-# makes a home 0700, so a tool installed into ~noprivuser-install could not be
-# *executed* by noprivuser-run — `runuser -u noprivuser-run -- ~/.local/bin/bbot`
-# failed with "Permission denied" before the binary was ever reached. apt tools
-# were fine only because they land in /usr/bin.
+# This is not about accounts — it survived their removal on its own merit. The
+# distro ships its own `httpx` and `subfinder`, several versions behind the ones
+# the baseline pins, and both land in /usr/bin. Resolving an installed tool by
+# asking the shell found those instead: penstation recorded /usr/bin/subfinder
+# v2.6.0 for a recipe that had just installed v2.14.0, and would have scanned
+# with it. Putting our installs somewhere we control, and looking there first,
+# is what stops a same-named binary elsewhere on PATH being what actually ran.
 #
-# The prefix is owned by the install account and mode 0755, which states the
-# intended relationship directly: the installer writes, the runner executes, and
-# the runner cannot modify what it runs. Relying on the two accounts' umasks
-# happening to be 022 would buy the same thing on a good day and fail silently on
-# a bad one.
-#
-# setup.sh creates it. When it is absent — a dev box with no accounts at all —
-# everything falls back to the current user's home, where the question does not
-# arise because there is only one account.
+# setup.sh creates it; when it is absent, everything falls back to the home
+# directory, which is what a dev box wants anyway.
 SHARED_PREFIX = "/opt/penstation"
 
 
-def prefix(user: str = "") -> str:
-    """Root of the install tree for `user`."""
-    return SHARED_PREFIX if os.path.isdir(SHARED_PREFIX) else home_of(user)
+def prefix() -> str:
+    """Root of the install tree."""
+    return SHARED_PREFIX if os.path.isdir(SHARED_PREFIX) else home_of()
 
 
-def bin_dir(user: str = "") -> str:
+def bin_dir() -> str:
     """Where installed commands land — GOBIN and pipx's bin dir alike."""
-    return f"{prefix(user)}/bin"
+    return f"{prefix()}/bin"
 
 
-def pipx_home(user: str = "") -> str:
-    """Where pipx keeps its venvs. Must be readable by the run account too: a
-    console script's shebang points straight into its venv's interpreter."""
-    return f"{prefix(user)}/pipx"
+def pipx_home() -> str:
+    """Where pipx keeps its venvs."""
+    return f"{prefix()}/pipx"
 
 
-def tools_dir(user: str = "") -> str:
+def tools_dir() -> str:
     """Where clone+venv trees land, one directory per tool."""
-    return f"{prefix(user)}/tools"
+    return f"{prefix()}/tools"
 
 
-def workdir(user: str = "") -> str:
-    """A directory `user` can actually enter, to start a subprocess in.
+def workdir() -> str:
+    """A directory to start a subprocess in, rather than inheriting ours.
 
-    A subprocess inherits penstation's own working directory, and penstation is
-    normally started from its checkout — which on a Kali engagement box is
-    /root/Penstation, mode 0700 and owned by root. Stepping down to an
-    unprivileged account leaves the CWD pointing there, and the account cannot
-    chdir into it.
-
-    That surfaced as a build failure with nothing to do with the build: the Go
-    toolchain chdirs in every `compile` it spawns, so a `go install` died with
-    "chdir /root/Penstation: permission denied" once per package — hundreds of
-    identical lines, and an exit 1 that looked like a broken recipe. apt was
-    unaffected because it runs as root, which is why the distro rungs worked
-    while every user-scoped rung failed on the same box.
-
-    So: anything that runs as another account starts in that account's own home.
+    Never inherit penstation's own. It is normally the checkout — on an
+    engagement box /root/Penstation — and what a tool does with the working
+    directory is not ours to assume: bbot stats every target against it to
+    decide whether the target names a file, and the Go toolchain chdirs in each
+    `compile` it spawns. An incidental CWD is a source of failures that have
+    nothing to do with the command being run.
     """
-    # Existence is all we can usefully check from here: we are typically root,
-    # and root's os.access() says yes to directories the target account cannot
-    # enter, so a permission probe would only give false confidence.
-    home = home_of(user)
+    home = home_of()
     return home if os.path.isdir(home) else tempfile.gettempdir()
-
-
-# -- running things ----------------------------------------------------
-def as_user(user: str, argv: Sequence[str]) -> list[str]:
-    """Wrap argv so it runs as `user`, or unchanged when no user is set.
-
-    Root can step down with runuser and never needs a password. Unprivileged,
-    we go through sudo, which needs the drop-in described in the design doc —
-    `-n` so a missing rule fails immediately rather than hanging on a prompt
-    that nobody is there to answer.
-    """
-    if not user:
-        return list(argv)
-    if hasattr(os, "geteuid") and os.geteuid() == 0:
-        return ["runuser", "-u", user, "--", *argv]
-    return ["sudo", "-n", "-u", user, *argv]
 
 
 async def _stream(argv: Sequence[str], on_line: OnLine, timeout: float,
@@ -224,23 +172,20 @@ async def preflight() -> str:
 
 
 # -- where a tool ended up ---------------------------------------------
-# Resolved rather than assumed: apt lands in /usr/bin, go install in the install
-# user's GOPATH, pipx in its own bin dir. Storing the absolute path is what makes
-# a run reproducible when the server and the tool run as different users with
-# different PATHs.
+# Resolved rather than assumed: apt lands in /usr/bin, go install and pipx in our
+# own prefix. Storing the absolute path is what makes a run reproducible.
 SEARCH_DIRS = ("/usr/local/bin", "/usr/bin", "/bin", "/usr/local/sbin", "/usr/sbin")
 
 
-async def binary_path(name: str, user: str = "") -> str:
+async def binary_path(name: str) -> str:
     """Absolute path to an installed binary, or "" if it isn't there."""
-    # The shared prefix first, and by path rather than by lookup: `command -v`
-    # answers from the *server's* PATH, which is a different account's. That is
-    # how a same-named binary earlier on someone's PATH becomes the thing that
-    # actually ran — the Python `httpx` console script shadowing ProjectDiscovery's
-    # is the case that bites in this space.
-    home = home_of(user)
+    # Our prefix first, and by path rather than by lookup. `command -v` answers
+    # from PATH, and PATH is how the distro's own `subfinder` (v2.6.0, in
+    # /usr/bin) got recorded for a recipe that had just installed v2.14.0. What
+    # we installed wins over what happens to be named the same.
+    home = home_of()
     candidates = (
-        f"{bin_dir(user)}/{name}",
+        f"{bin_dir()}/{name}",
         f"{home}/.local/bin/{name}",       # pre-prefix installs, still valid
         f"{home}/go/bin/{name}",
         *(f"{d}/{name}" for d in SEARCH_DIRS),
@@ -249,8 +194,7 @@ async def binary_path(name: str, user: str = "") -> str:
         if os.path.isfile(p) and os.access(p, os.X_OK):
             return p
     # Nothing where we put things — fall back to asking the shell.
-    code, out = await _capture(as_user(user, ["sh", "-c", f"command -v {name}"]),
-                               cwd=workdir(user))
+    code, out = await _capture(["sh", "-c", f"command -v {name}"], cwd=workdir())
     if code == 0 and out.strip():
         return out.strip().splitlines()[0]
     return ""
@@ -285,15 +229,15 @@ async def apt_install(pkg: str, on_line: OnLine) -> None:
         raise InstallError(f"apt-get install {pkg} failed (exit {code})")
 
 
-async def pipx_install(spec: str, on_line: OnLine, user: str = "") -> None:
+async def pipx_install(spec: str, on_line: OnLine) -> None:
     """Install a Python tool into its own venv.
 
     pipx rather than pip because each tool gets an isolated dependency tree,
     which is the part of per-tool images actually worth keeping.
     """
-    env = {"PIPX_HOME": pipx_home(user), "PIPX_BIN_DIR": bin_dir(user)}
-    code = await _stream(as_user(user, ["pipx", "install", spec]),
-                         on_line, INSTALL_TIMEOUT, env=env, cwd=workdir(user))
+    env = {"PIPX_HOME": pipx_home(), "PIPX_BIN_DIR": bin_dir()}
+    code = await _stream(["pipx", "install", spec],
+                         on_line, INSTALL_TIMEOUT, env=env, cwd=workdir())
     if code != 0:
         raise InstallError(f"pipx install {spec} failed (exit {code})")
 
@@ -303,15 +247,14 @@ def venv_name(spec: str) -> str:
     return re.split(r"[<>=!~\[]", (spec or "").strip(), 1)[0].strip()
 
 
-async def pipx_inject(spec: str, packages: list, on_line: OnLine,
-                      user: str = "") -> None:
+async def pipx_inject(spec: str, packages: list, on_line: OnLine) -> None:
     """Install extra packages *into* an already-installed tool's venv.
 
     For dependencies a tool would otherwise resolve while running. bbot installs
-    its own module dependencies at scan time and asks for root to do it, which
-    the run account has no way to answer — so the scan died on a password prompt
-    before a module loaded. Declaring them here installs them at setup instead:
-    unprivileged, recorded on the tool record, and replayed on reinstall.
+    its own module dependencies mid-scan, which makes an engagement depend on
+    PyPI being reachable at exactly the wrong moment. Declaring them here
+    installs them at setup instead, recorded on the record and replayed on
+    reinstall.
 
     Not fatal. A missing optional dependency costs one module; failing the whole
     install over it would cost the tool.
@@ -319,10 +262,10 @@ async def pipx_inject(spec: str, packages: list, on_line: OnLine,
     if not packages:
         return
     name = venv_name(spec)
-    env = {"PIPX_HOME": pipx_home(user), "PIPX_BIN_DIR": bin_dir(user)}
+    env = {"PIPX_HOME": pipx_home(), "PIPX_BIN_DIR": bin_dir()}
     try:
-        code = await _stream(as_user(user, ["pipx", "inject", name, *packages]),
-                             on_line, INSTALL_TIMEOUT, env=env, cwd=workdir(user))
+        code = await _stream(["pipx", "inject", name, *packages],
+                             on_line, INSTALL_TIMEOUT, env=env, cwd=workdir())
         why = f"exit {code}" if code else ""
     except InstallError as exc:
         why = str(exc)          # pipx gone, or the call never started
@@ -331,30 +274,29 @@ async def pipx_inject(spec: str, packages: list, on_line: OnLine,
                 f"({why}) — modules needing those will be skipped\n")
 
 
-async def go_install(pkg: str, on_line: OnLine, user: str = "") -> None:
+async def go_install(pkg: str, on_line: OnLine) -> None:
     """Install a Go tool from its module path.
 
     The path comes from the repo's own documentation, never from the repo name —
     subfinder's is `github.com/projectdiscovery/subfinder/v2/cmd/subfinder`, and
     guessing `owner/repo` fails for most real tools. See gather.extract_install.
     """
-    # GOPATH stays in the install account's home: it is the module cache, wanted
-    # only at build time. GOBIN is the shared prefix, because the *binary* is
-    # what another account has to execute.
-    home = home_of(user)
-    env = {"GOPATH": f"{home}/go", "GOBIN": bin_dir(user),
+    # GOPATH stays in the home directory — it is the module cache, wanted only
+    # at build time. GOBIN is our prefix, because that is where we look first.
+    home = home_of()
+    env = {"GOPATH": f"{home}/go", "GOBIN": bin_dir(),
            "HOME": home, "GOFLAGS": "-modcacherw"}
     if not pkg.endswith("@latest") and "@" not in pkg.rsplit("/", 1)[-1]:
         pkg = f"{pkg}@latest"
     # cwd matters more here than anywhere else: the toolchain chdirs in every
     # `compile` it spawns, so an unreachable CWD fails once per package.
-    code = await _stream(as_user(user, ["go", "install", pkg]),
-                         on_line, INSTALL_TIMEOUT, env=env, cwd=workdir(user))
+    code = await _stream(["go", "install", pkg],
+                         on_line, INSTALL_TIMEOUT, env=env, cwd=workdir())
     if code != 0:
         raise InstallError(f"go install {pkg} failed (exit {code})")
 
 
-async def clone_venv(git_url: str, dest: str, on_line: OnLine, user: str = "",
+async def clone_venv(git_url: str, dest: str, on_line: OnLine,
                      requirements: str = "requirements.txt") -> None:
     """Clone a repo and install its requirements into a venv beside it.
 
@@ -363,19 +305,19 @@ async def clone_venv(git_url: str, dest: str, on_line: OnLine, user: str = "",
     is kept rather than discarded because tools like cloud_enum ship data files
     (wordlists, mutation lists) that a bare binary would lose.
     """
-    work = workdir(user)
-    code = await _stream(as_user(user, ["git", "clone", "--depth", "1", git_url, dest]),
+    work = workdir()
+    code = await _stream(["git", "clone", "--depth", "1", git_url, dest],
                          on_line, INSTALL_TIMEOUT, cwd=work)
     if code != 0:
         raise InstallError(f"git clone failed (exit {code})")
-    code = await _stream(as_user(user, ["python3", "-m", "venv", f"{dest}/.venv"]),
+    code = await _stream(["python3", "-m", "venv", f"{dest}/.venv"],
                          on_line, INSTALL_TIMEOUT, cwd=work)
     if code != 0:
         raise InstallError(f"venv creation failed (exit {code})")
     req = f"{dest}/{requirements}"
     if os.path.isfile(req):
         code = await _stream(
-            as_user(user, [f"{dest}/.venv/bin/pip", "install", "-r", req]),
+            [f"{dest}/.venv/bin/pip", "install", "-r", req],
             on_line, INSTALL_TIMEOUT, cwd=work)
         if code != 0:
             raise InstallError(f"pip install -r {requirements} failed (exit {code})")
@@ -400,7 +342,7 @@ def _help_score(text: str) -> tuple[int, int]:
     return (1 if _HELPISH.search(text or "") else 0, len(text or ""))
 
 
-async def capture_help(binary: str, user: str = "") -> str:
+async def capture_help(binary: str) -> str:
     """The tool's own help text, for on-screen guidance.
 
     Kept even on a non-zero exit: plenty of tools print usage to stderr and exit
@@ -408,8 +350,7 @@ async def capture_help(binary: str, user: str = "") -> str:
     """
     best, best_score = "", (0, 0)
     for flag in HELP_FLAGS:
-        _, out = await _capture(as_user(user, [binary, flag]), HELP_TIMEOUT,
-                                cwd=workdir(user))
+        _, out = await _capture([binary, flag], HELP_TIMEOUT, cwd=workdir())
         score = _help_score(out)
         if score > best_score:
             best, best_score = out, score
@@ -418,7 +359,7 @@ async def capture_help(binary: str, user: str = "") -> str:
     return best.strip()
 
 
-async def capture_version(binary: str, user: str = "") -> str:
+async def capture_version(binary: str) -> str:
     """What this box actually resolved.
 
     Replaces pinning. The version comes from the distro or the module proxy
@@ -426,18 +367,17 @@ async def capture_version(binary: str, user: str = "") -> str:
     the same reason every map node records the tool and run that found it.
     """
     for flag in VERSION_FLAGS:
-        _, out = await _capture(as_user(user, [binary, flag]), QUICK_TIMEOUT,
-                                cwd=workdir(user))
+        _, out = await _capture([binary, flag], QUICK_TIMEOUT, cwd=workdir())
         line = (out or "").strip().splitlines()
         if line and any(ch.isdigit() for ch in line[0]):
             return line[0].strip()[:200]
     return ""
 
 
-async def verify(binary: str, user: str = "") -> tuple[str, str]:
+async def verify(binary: str) -> tuple[str, str]:
     """(help text, version). Raises if the binary produced nothing at all."""
-    help_text = await capture_help(binary, user)
-    version = await capture_version(binary, user)
+    help_text = await capture_help(binary)
+    version = await capture_version(binary)
     if not help_text and not version:
         raise InstallError(
             f"{binary} produced no output for --help or --version — "
@@ -451,15 +391,14 @@ async def apt_remove(pkg: str, on_line: OnLine) -> None:
                   env={"DEBIAN_FRONTEND": "noninteractive"}, cwd=workdir())
 
 
-async def pipx_uninstall(name: str, on_line: OnLine, user: str = "") -> None:
-    await _stream(as_user(user, ["pipx", "uninstall", name]), on_line, APT_TIMEOUT,
-                  env={"PIPX_HOME": pipx_home(user), "PIPX_BIN_DIR": bin_dir(user)},
-                  cwd=workdir(user))
+async def pipx_uninstall(name: str, on_line: OnLine) -> None:
+    await _stream(["pipx", "uninstall", name], on_line, APT_TIMEOUT,
+                  env={"PIPX_HOME": pipx_home(), "PIPX_BIN_DIR": bin_dir()},
+                  cwd=workdir())
 
 
-async def remove_path(path: str, on_line: OnLine, user: str = "") -> None:
+async def remove_path(path: str, on_line: OnLine) -> None:
     """For go-install binaries and clone+venv trees."""
     if not path or path in ("/", "/usr", "/usr/bin", "/home"):
         raise InstallError(f"refusing to remove {path!r}")
-    await _stream(as_user(user, ["rm", "-rf", "--", path]), on_line, QUICK_TIMEOUT,
-                  cwd=workdir(user))
+    await _stream(["rm", "-rf", "--", path], on_line, QUICK_TIMEOUT, cwd=workdir())

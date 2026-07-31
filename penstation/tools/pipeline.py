@@ -46,12 +46,9 @@ class Pipeline:
     # against the distro and never fetches from the internet.
     ALL_RUNGS = ("apt", "pipx", "go-install", "release-binary", "clone-venv")
 
-    def __init__(self, install_user: str = "", allowed_rungs=None) -> None:
+    def __init__(self, allowed_rungs=None) -> None:
         self._sig: dict[str, G.Signals] = {}   # cached per tool, inspect -> acquire
         self._plan: dict[str, list[Candidate]] = {}   # recipes left to try
-        # The unprivileged account installs run as, so a package's setup.py
-        # never holds the access penstation itself has. Empty means "this user".
-        self.install_user = install_user
         self.allowed_rungs = tuple(allowed_rungs or self.ALL_RUNGS)
 
     # -- logging: persist + stream -------------------------------------
@@ -211,9 +208,8 @@ class Pipeline:
         return ""
 
     def _tool_dir(self, rec: ToolRecord) -> str:
-        """Where a cloned tool lives. One directory per tool, under the shared
-        prefix: the install account owns it, the run account executes from it."""
-        return f"{N.tools_dir(self.install_user)}/{rec.id}"
+        """Where a cloned tool lives. One directory per tool, under the prefix."""
+        return f"{N.tools_dir()}/{rec.id}"
 
     def _adopt(self, rec: ToolRecord, cand: Candidate) -> None:
         rec.strategy = cand.kind
@@ -261,30 +257,27 @@ class Pipeline:
         the next recipe is both faster and more honest.
         """
         on_line = lambda text: self._log(rec, text)
-        user = self.install_user
         if cand.kind == "apt":
-            # Root by nature, and the one rung that does not execute code from
-            # the repository being installed.
+            # The one rung that does not execute code from the repository being
+            # installed — apt runs maintainer scripts from a signed archive.
             await N.apt_install(cand.pkg, on_line)
         elif cand.kind == "pipx":
-            await N.pipx_install(cand.pkg, on_line, user)
-            await N.pipx_inject(cand.pkg, list(rec.install_inject), on_line, user)
+            await N.pipx_install(cand.pkg, on_line)
+            await N.pipx_inject(cand.pkg, list(rec.install_inject), on_line)
         elif cand.kind == "go-install":
-            await N.go_install(cand.pkg, on_line, user)
+            await N.go_install(cand.pkg, on_line)
         elif cand.kind == "clone-venv":
-            await N.clone_venv(f"{rec.source_url}.git", self._tool_dir(rec),
-                               on_line, user)
+            await N.clone_venv(f"{rec.source_url}.git", self._tool_dir(rec), on_line)
         else:
             raise SetupFailed(f"unknown strategy {cand.kind!r}")
 
     # -- 6. Verify -----------------------------------------------------
     async def verify(self, rec: ToolRecord) -> None:
-        # Resolved, not assumed. The install user's PATH is not the server's —
-        # apt writes to /usr/bin, go install to that user's GOPATH, pipx to its
-        # own bin dir — and knowing which file runs is what makes a run
-        # reproducible when the two are different accounts.
+        # Resolved, not assumed. apt writes to /usr/bin, go install and pipx to
+        # our own prefix, and knowing exactly which file runs is what stops the
+        # distro's same-named, older binary being what a scan actually used.
         binary = rec.install_binary or rec.id
-        path = await N.binary_path(binary, self.install_user)
+        path = await N.binary_path(binary)
         if not path:
             raise SetupFailed(
                 f"installed, but no `{binary}` on PATH afterwards — the package "
@@ -297,7 +290,7 @@ class Pipeline:
         # version, which replaces pinning now that the box resolves it rather
         # than an image we built.
         self._log(rec, "capturing --help and --version…\n")
-        rec.help_text, rec.version = await N.verify(path, self.install_user)
+        rec.help_text, rec.version = await N.verify(path)
         rec.save()
         if rec.version:
             self._log(rec, f"version: {rec.version}\n")

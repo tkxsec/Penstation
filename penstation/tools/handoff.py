@@ -82,8 +82,8 @@ Constraints — these are properties of my installer, not preferences:
 - Never pipe a download into a shell (`curl ... | sh`). curl and wget are
   rejected outright in an install command.
 - No sudo/su in the command itself — privilege is handled by the installer.
-- It runs as an unprivileged account whose HOME is its own, so anything writing
-  outside that home or /opt/penstation will fail.
+- It should write only under /opt/penstation or the home directory; anything
+  installing elsewhere will be missed by the step that resolves the binary.
 - Afterwards a binary must exist in /opt/penstation/bin (where GOBIN and pipx's
   bin dir both point) or on PATH, because the next step resolves the command's
   absolute path and fails without it.
