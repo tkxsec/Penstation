@@ -123,6 +123,22 @@ def wildcard_of(value: str) -> str:
     return parent if parent and _DOMAIN.match(parent) else ""
 
 
+def wildcards_in(text: str) -> set:
+    """Wildcard parents an event stream declares, and nothing else from it.
+
+    A tool can report the wildcard somewhere other than the file it is promoted
+    from. bbot writes the names it found to its declared result file and the
+    wildcard to its event log — and the event log is not promotable, because it
+    also carries every affiliate host reached through the target's MX, NS and
+    SPF records. So the fact is read from it and the rows are not.
+    """
+    out = parse_events(text)
+    if not out.get("matched"):
+        return set()
+    return {canon_domain(r["value"]) for r in out["rows"]
+            if r.get("wildcard") and r.get("value")}
+
+
 def wildcard_over(wildcards, value: str) -> str:
     """The nearest domain in `wildcards` that this value sits under, or "".
 

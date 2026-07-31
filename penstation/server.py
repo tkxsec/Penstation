@@ -381,6 +381,34 @@ def _settings_state() -> dict:
             }
 
 
+# Event logs are the only place some tools state a wildcard, and they can be
+# large — bbot's output.json is tens of megabytes on a wide scan. Read the ones
+# small enough to be worth it and skip the rest rather than stall a page load.
+_EVENT_SUFFIXES = (".json", ".jsonl", ".ndjson")
+_EVENT_MAX_BYTES = 8 * 1024 * 1024
+
+
+def _declared_wildcards(run) -> set:
+    """Wildcard parents named in a run's retained event logs."""
+    if run is None:
+        return set()
+    out = set()
+    for f in (run.files or []):
+        name = f.get("name", "")
+        if not name.lower().endswith(_EVENT_SUFFIXES):
+            continue
+        if (f.get("bytes") or 0) > _EVENT_MAX_BYTES:
+            continue
+        fp = run.file_path(name)
+        if not fp:
+            continue
+        try:
+            out |= gmap.wildcards_in(fp.read_text(errors="replace"))
+        except OSError:
+            pass
+    return out
+
+
 def _apply_install_spec(rec, entry: dict, tid: str) -> None:
     """Copy an engagement type's declared install spec onto a tool record."""
     spec = entry.get("install") or {}
@@ -893,6 +921,13 @@ def make_handler():
                          if gmap.WILDCARD in n.tags}
                 wilds |= {gmap.canon_domain(r["value"]) for r in found["rows"]
                           if r.get("wildcard")}
+                # And the ones declared in a file the run kept but is not
+                # promoted from. A tool that names its result file is read there
+                # and nowhere else, which is right for findings and wrong for
+                # this: bbot puts the names in subdomains.txt and the wildcard in
+                # its event log, so reading only the declared file means the
+                # wildcard is never seen and nothing folds. Facts, not rows.
+                wilds |= _declared_wildcards(run)
 
                 seen, rows, folded = set(), [], {}
                 for r in found["rows"]:
