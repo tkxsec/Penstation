@@ -1,0 +1,13 @@
+# Shell scripts must keep LF endings, whatever the checkout platform.
+#
+# With core.autocrlf=true a Windows working tree gets CRLF, and a script copied
+# from there to Linux has a shebang reading `#!/usr/bin/env bash\r` — the shell
+# looks for an interpreter literally named "bash\r" and reports command not
+# found, which sends you looking for a missing file that is right there.
+*.sh text eol=lf
+
+# Same reasoning: these are read by tools on the engagement box.
+*.py text eol=lf
+*.toml text eol=lf
+*.md text eol=lf
+*.html text eol=lf
