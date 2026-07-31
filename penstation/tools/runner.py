@@ -21,7 +21,6 @@ import os
 import shlex
 import signal
 import tempfile
-import time
 from pathlib import Path
 from typing import Callable
 
@@ -44,7 +43,7 @@ INPUT_NAME = "input.txt"
 def _run_user() -> str:
     return N.account("run")
 
-# tool id -> container name, for Stop
+# tool id -> pid of the running process group leader, for Stop
 _active: dict[str, int] = {}
 
 
@@ -56,22 +55,7 @@ def is_running(tool_id: str) -> bool:
     return tool_id in _active
 
 
-def _container_name(tool_id: str) -> str:
-    return f"penstation-run-{tool_id}-{int(time.time() * 1000)}"
-
-
-def _strip_entrypoint(rec: ToolRecord, parts: list[str]) -> list[str]:
-    if not parts:
-        return parts
-    first = os.path.basename(parts[0]).lower()
-    known = {os.path.basename(rec.entrypoint or "").lower(), rec.id.lower()}
-    known.discard("")
-    if rec.argv_mode == "entrypoint" and first in known:
-        return parts[1:]
-    return parts
-
-
-def build_argv(rec: ToolRecord, command: str, name: str,
+def build_argv(rec: ToolRecord, command: str,
                outdir_host: Path | None = None,
                has_input: bool = False) -> list[str]:
     """Assemble the argv to execute.
@@ -81,8 +65,8 @@ def build_argv(rec: ToolRecord, command: str, name: str,
     nuclei -l, dnsx -l — so without an input path the output of one step cannot
     become the input of the next.
 
-    With no container there is no mount and no path translation: the tool sees
-    the same directory the server does, which is the run's own scratch dir.
+    There is no mount and no path translation: the tool sees the same directory
+    the server does, which is the run's own scratch dir.
 
     The first token is replaced with the binary's resolved absolute path when we
     have one. The server and the tool may run as different accounts with
@@ -90,12 +74,10 @@ def build_argv(rec: ToolRecord, command: str, name: str,
     makes the run reproducible — and what stops a same-named binary earlier on
     someone's PATH being the thing that actually ran.
     """
-    # Split first, substitute second. The Docker version could fill the path in
-    # before splitting because "/out" survives shlex untouched; a real directory
-    # does not. shlex reads a backslash as an escape, so a Windows path loses its
-    # separators outright, and a path containing a space would split into two
-    # arguments on any platform. Substituting per-token means the path is never
-    # parsed at all.
+    # Split first, substitute second. shlex reads a backslash as an escape, so a
+    # Windows path would lose its separators outright, and a path containing a
+    # space would split into two arguments on any platform. Substituting
+    # per-token means the path is never parsed at all.
     try:
         parts = shlex.split(command)
     except ValueError as exc:
@@ -118,7 +100,7 @@ async def run_command(rec: ToolRecord, command: str, on_line: OnLine,
                       timeout: float = DEFAULT_TIMEOUT,
                       outdir_keep: Path | None = None,
                       input_text: str = "") -> dict:
-    """Run a command in the tool's image.
+    """Run an installed tool as a subprocess.
 
     `outdir_keep` is where files the tool writes to {{outdir}} should land. Pass
     the run's own directory and they survive; omit it and a temp dir is used and
@@ -133,8 +115,8 @@ async def run_command(rec: ToolRecord, command: str, on_line: OnLine,
     if not check:
         raise RunError(check.reason)
 
-    # {{input}} needs the same mount {{outdir}} uses, so asking for either one
-    # gets you the directory.
+    # {{input}} lives in the same directory {{outdir}} names, so asking for
+    # either one gets you the directory.
     wants_dir = "{{outdir}}" in command or "{{input}}" in command
     scratch: tempfile.TemporaryDirectory | None = None
     outdir: Path | None = None
@@ -151,9 +133,14 @@ async def run_command(rec: ToolRecord, command: str, on_line: OnLine,
         (outdir / INPUT_NAME).write_text(
             input_text if input_text.endswith("\n") else input_text + "\n")
 
-    name = _container_name(rec.id)
-    argv = build_argv(rec, command, name, outdir, has_input)
+    argv = build_argv(rec, command, outdir, has_input)
     on_line("$ " + " ".join(shlex.quote(a) for a in argv) + "\n")
+
+    # Never inherit penstation's own CWD. It is normally the checkout — on an
+    # engagement box /root/Penstation, mode 0700 — and the unprivileged account
+    # a tool runs as cannot chdir into it. The run's own directory is both
+    # reachable and where a tool writing relative paths should land anyway.
+    cwd = str(outdir) if outdir is not None else N.workdir(_run_user())
 
     try:
         try:
@@ -166,6 +153,7 @@ async def run_command(rec: ToolRecord, command: str, on_line: OnLine,
                 stdin=asyncio.subprocess.DEVNULL,   # closed: never hang on input
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
+                cwd=cwd,
             )
         except FileNotFoundError:
             raise RunError(f"`{argv[0]}` not found — is the tool still installed?") from None

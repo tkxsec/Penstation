@@ -9,11 +9,11 @@ natively and run as subprocesses. Which rungs are permitted is a per-deployment
 policy: everything on a box you provision and destroy, distro packages only on
 hardware you do not own.
 
-There was an LLM stage here that wrote and repaired Dockerfiles. It was removed:
-across every tool added in development, each one that installed did so through a
-deterministic rung, while the model produced broken recipes (a Dockerfile that
-never cloned the repo) and repair loops that thrashed without ever rescuing a
-build. Fixing the *environment* — era-matched base images, C-extension headers —
+There was an LLM stage here that wrote and repaired install recipes. It was
+removed: across every tool added in development, each one that installed did so
+through a deterministic rung, while the model produced broken recipes and repair
+loops that thrashed without ever rescuing a build. Fixing the *environment* —
+the right toolchain, the C-extension headers a compile actually links against —
 solved what the model could not, and did it in milliseconds instead of minutes.
 """
 from __future__ import annotations
@@ -88,12 +88,11 @@ class Pipeline:
             raise SetupFailed(str(exc)) from exc
         self._sig[rec.id] = sig
 
-        eco, _ = sig.ecosystem()
+        eco = sig.ecosystem()
         rec.resolved_ref = sig.commit
         rec.target_kind = G.target_kind(sig)
         self._log(rec, f"  repo={sig.owner}/{sig.repo} lang={sig.language or '?'} "
-                       f"ecosystem={eco or '?'} dockerfile={sig.has_dockerfile} "
-                       f"commit={sig.commit or '?'}\n")
+                       f"ecosystem={eco or '?'} commit={sig.commit or '?'}\n")
         self._log(rec, f"  {G.quota_note()}\n")
 
         # Deterministic run template first; --help overrides it at verify.
@@ -111,8 +110,7 @@ class Pipeline:
         self._plan[rec.id] = plan
         if not plan:
             raise SetupFailed(
-                "no published image, no Dockerfile, and no install command could "
-                "be derived from this repository")
+                "no install command could be derived from this repository")
         self._log(rec, f"  {len(plan)} recipe(s) to try:\n")
         for i, cand in enumerate(plan, 1):
             self._log(rec, f"    {i}. {cand.note}\n")
@@ -256,13 +254,13 @@ class Pipeline:
         """Install one candidate. Raises InstallError so the caller tries the next.
 
         There is deliberately no repair loop here. Measured across every tool
-        added in development, the repair loop never rescued a build: it deleted
-        its own earlier fixes, invented package versions that had never existed,
-        and looped on identical answers — while every tool that actually
-        installed did so through a deterministic rung or a Dockerfile the model
-        wrote in one shot. Diagnosing a build failure is a far harder job than
-        writing a recipe from documentation, and a local model is not good at
-        it. Falling through to the next recipe is both faster and more honest.
+        added in development, the repair loop never rescued an install: it
+        deleted its own earlier fixes, invented package versions that had never
+        existed, and looped on identical answers — while every tool that
+        actually installed did so through a deterministic rung, first try.
+        Diagnosing a failure is a far harder job than writing a recipe from
+        documentation, and a local model is not good at it. Falling through to
+        the next recipe is both faster and more honest.
         """
         on_line = lambda text: self._log(rec, text)
         user = self.install_user
@@ -293,7 +291,6 @@ class Pipeline:
                 f"installed, but no `{binary}` on PATH afterwards — the package "
                 "may install a differently named command")
         rec.binary_path, rec.entrypoint = path, binary
-        rec.argv_mode = "argv"          # no images, so no ENTRYPOINT to strip
         rec.save()
         self._log(rec, f"binary: {path}\n")
 

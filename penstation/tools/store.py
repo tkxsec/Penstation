@@ -30,7 +30,7 @@ STRATEGIES = ("apt", "pipx", "go-install", "release-binary", "clone-venv")
 
 
 def slug(text: str) -> str:
-    """A filesystem/docker-safe id."""
+    """A filesystem-safe id."""
     s = re.sub(r"[^a-z0-9._-]+", "-", (text or "").strip().lower()).strip("-._")
     return s[:64] or "tool"
 
@@ -41,7 +41,6 @@ class ToolRecord:
     source_url: str = ""
     section: str = ""
     strategy: str = ""
-    image: str = ""
     resolved_ref: str = ""       # commit/tag actually installed
     install_cmd: str = ""
     # Where the tool actually landed, resolved with `command -v` rather than
@@ -53,10 +52,7 @@ class ToolRecord:
     install_pkg: str = ""        # package / module path that rung installs
     install_binary: str = ""     # command it provides, when it differs from the
                                  # package name — dnsutils installs `dig`
-    dockerfile: str = ""         # legacy — kept so pre-native records still load
-    alt_install_cmd: str = ""    # generated-Dockerfile fallback if the repo's own build fails
     manual_install: str = ""     # install command you supplied when the ladder found none
-    manual_dockerfile: str = ""  # a whole Dockerfile you supplied instead
     tried: list = field(default_factory=list)   # recipe notes, for the handoff prompt
     baseline: bool = False       # part of an engagement type's baseline toolset
     check: str = ""              # coverage kind this tool satisfies (portscan, resolve…)
@@ -80,8 +76,7 @@ class ToolRecord:
     last_command: str = ""       # what you last ran, for history only
     command_override: str = ""   # your edit, if you made one; clears back to
                                  # the generated default when emptied
-    argv_mode: str = ""          # entrypoint | argv (set at verify)
-    entrypoint: str = ""         # image ENTRYPOINT basename, for arg-stripping
+    entrypoint: str = ""         # basename of the command it provides
     help_text: str = ""          # captured --help, shown beside the run box
     target_kind: str = "domain"
     output_format: str = "stdout"

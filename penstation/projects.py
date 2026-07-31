@@ -1,10 +1,10 @@
 """Engagements, and which tools each one uses.
 
-A tool's Docker image is expensive to build and identical whichever client you
-point it at, so images live in one library (tools/store.py) and a project only
-records *which* of them it uses, and in which section. The same nuclei image can
-therefore serve every engagement without rebuilding, while each engagement shows
-only the tooling that belongs to it.
+Installing a tool is expensive and the result is identical whichever client you
+point it at, so tools live in one library (tools/store.py) and a project only
+records *which* of them it uses, and in which section. The same nuclei install
+can therefore serve every engagement without being redone, while each engagement
+shows only the tooling that belongs to it.
 
 Sections come from the engagement type: an external test and an internal one run
 through different phases, so the section list is a property of the type rather

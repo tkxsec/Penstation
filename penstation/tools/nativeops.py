@@ -1,14 +1,14 @@
 """Native install operations — the acquire step on a box with no container runtime.
 
-Replaces dockerops. Same shape: every command is built as an **argv list and run
-without a shell**, and all output is streamed line-by-line through `on_line` so a
-slow install is watchable rather than a blob at the end.
+Every command is built as an **argv list and run without a shell**, and all
+output is streamed line-by-line through `on_line` so a slow install is watchable
+rather than a blob at the end.
 
-Two things differ from the Docker version, and both matter.
+Two properties matter, and both follow from there being no sandbox.
 
-**The validator is no longer defence in depth.** Behind a container, a bad install
-command trashed a throwaway build. Here it runs on the engagement box, so
-validate.py is the barrier rather than a second one. Nothing reaches a shell.
+**The validator is not defence in depth — it is the defence.** An install runs on
+the engagement box itself, so validate.py is the barrier rather than a second one
+behind something else. Nothing reaches a shell.
 
 **Installs run as another user.** `install_user` is an unprivileged account that
 cannot read the engagement data or your keys, so a package's setup.py never holds
@@ -21,6 +21,7 @@ import asyncio
 import os
 import re
 import shutil
+import tempfile
 from typing import Callable, Sequence
 
 OnLine = Callable[[str], None]
@@ -64,6 +65,36 @@ def account(kind: str) -> str:
     return standard if _exists(standard) else ""
 
 
+def home_of(user: str = "") -> str:
+    """Home directory of the account a command will run as."""
+    return f"/home/{user}" if user else os.path.expanduser("~")
+
+
+def workdir(user: str = "") -> str:
+    """A directory `user` can actually enter, to start a subprocess in.
+
+    A subprocess inherits penstation's own working directory, and penstation is
+    normally started from its checkout — which on a Kali engagement box is
+    /root/Penstation, mode 0700 and owned by root. Stepping down to an
+    unprivileged account leaves the CWD pointing there, and the account cannot
+    chdir into it.
+
+    That surfaced as a build failure with nothing to do with the build: the Go
+    toolchain chdirs in every `compile` it spawns, so a `go install` died with
+    "chdir /root/Penstation: permission denied" once per package — hundreds of
+    identical lines, and an exit 1 that looked like a broken recipe. apt was
+    unaffected because it runs as root, which is why the distro rungs worked
+    while every user-scoped rung failed on the same box.
+
+    So: anything that runs as another account starts in that account's own home.
+    """
+    # Existence is all we can usefully check from here: we are typically root,
+    # and root's os.access() says yes to directories the target account cannot
+    # enter, so a permission probe would only give false confidence.
+    home = home_of(user)
+    return home if os.path.isdir(home) else tempfile.gettempdir()
+
+
 # -- running things ----------------------------------------------------
 def as_user(user: str, argv: Sequence[str]) -> list[str]:
     """Wrap argv so it runs as `user`, or unchanged when no user is set.
@@ -81,7 +112,7 @@ def as_user(user: str, argv: Sequence[str]) -> list[str]:
 
 
 async def _stream(argv: Sequence[str], on_line: OnLine, timeout: float,
-                  env: dict | None = None) -> int:
+                  env: dict | None = None, cwd: str | None = None) -> int:
     """Run argv, streaming combined output. Returns the exit code."""
     on_line("$ " + " ".join(argv) + "\n")
     full_env = {**os.environ, **(env or {})}
@@ -92,6 +123,7 @@ async def _stream(argv: Sequence[str], on_line: OnLine, timeout: float,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             env=full_env,
+            cwd=cwd,                            # see workdir(): never inherit ours
         )
     except FileNotFoundError as exc:
         raise InstallError(f"`{argv[0]}` not found on PATH") from exc
@@ -124,12 +156,14 @@ async def _stream(argv: Sequence[str], on_line: OnLine, timeout: float,
         raise InstallError(f"timed out after {int(timeout)}s") from None
 
 
-async def _capture(argv: Sequence[str], timeout: float = QUICK_TIMEOUT) -> tuple[int, str]:
+async def _capture(argv: Sequence[str], timeout: float = QUICK_TIMEOUT,
+                   cwd: str | None = None) -> tuple[int, str]:
     """Run argv quietly and return (exit code, combined output)."""
     try:
         proc = await asyncio.create_subprocess_exec(
             *argv, stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+            cwd=cwd)
         out, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
     except (asyncio.TimeoutError, OSError, FileNotFoundError):
         return -1, ""
@@ -157,11 +191,12 @@ SEARCH_DIRS = ("/usr/local/bin", "/usr/bin", "/bin", "/usr/local/sbin", "/usr/sb
 
 async def binary_path(name: str, user: str = "") -> str:
     """Absolute path to an installed binary, or "" if it isn't there."""
-    code, out = await _capture(as_user(user, ["sh", "-c", f"command -v {name}"]))
+    code, out = await _capture(as_user(user, ["sh", "-c", f"command -v {name}"]),
+                               cwd=workdir(user))
     if code == 0 and out.strip():
         return out.strip().splitlines()[0]
     # A user-scoped install may not be on the server's PATH at all.
-    home = f"/home/{user}" if user else os.path.expanduser("~")
+    home = home_of(user)
     for d in (f"{home}/.local/bin", f"{home}/go/bin", *SEARCH_DIRS):
         p = f"{d}/{name}"
         if os.path.isfile(p) and os.access(p, os.X_OK):
@@ -172,7 +207,7 @@ async def binary_path(name: str, user: str = "") -> str:
 # -- the rungs ---------------------------------------------------------
 async def apt_available(pkg: str) -> str:
     """The candidate version apt would install, or "" when there is none."""
-    code, out = await _capture(["apt-cache", "policy", pkg])
+    code, out = await _capture(["apt-cache", "policy", pkg], cwd=workdir())
     if code != 0:
         return ""
     for line in out.splitlines():
@@ -193,7 +228,7 @@ async def apt_install(pkg: str, on_line: OnLine) -> None:
     env = {"DEBIAN_FRONTEND": "noninteractive"}
     code = await _stream(
         ["apt-get", "install", "-y", "--no-install-recommends", pkg],
-        on_line, APT_TIMEOUT, env=env)
+        on_line, APT_TIMEOUT, env=env, cwd=workdir())
     if code != 0:
         raise InstallError(f"apt-get install {pkg} failed (exit {code})")
 
@@ -204,10 +239,10 @@ async def pipx_install(spec: str, on_line: OnLine, user: str = "") -> None:
     pipx rather than pip because each tool gets an isolated dependency tree,
     which is the part of per-tool images actually worth keeping.
     """
-    home = f"/home/{user}" if user else os.path.expanduser("~")
+    home = home_of(user)
     env = {"PIPX_HOME": f"{home}/.local/pipx", "PIPX_BIN_DIR": f"{home}/.local/bin"}
     code = await _stream(as_user(user, ["pipx", "install", spec]),
-                         on_line, INSTALL_TIMEOUT, env=env)
+                         on_line, INSTALL_TIMEOUT, env=env, cwd=workdir(user))
     if code != 0:
         raise InstallError(f"pipx install {spec} failed (exit {code})")
 
@@ -219,13 +254,15 @@ async def go_install(pkg: str, on_line: OnLine, user: str = "") -> None:
     subfinder's is `github.com/projectdiscovery/subfinder/v2/cmd/subfinder`, and
     guessing `owner/repo` fails for most real tools. See gather.extract_install.
     """
-    home = f"/home/{user}" if user else os.path.expanduser("~")
+    home = home_of(user)
     env = {"GOPATH": f"{home}/go", "GOBIN": f"{home}/go/bin",
            "HOME": home, "GOFLAGS": "-modcacherw"}
     if not pkg.endswith("@latest") and "@" not in pkg.rsplit("/", 1)[-1]:
         pkg = f"{pkg}@latest"
+    # cwd matters more here than anywhere else: the toolchain chdirs in every
+    # `compile` it spawns, so an unreachable CWD fails once per package.
     code = await _stream(as_user(user, ["go", "install", pkg]),
-                         on_line, INSTALL_TIMEOUT, env=env)
+                         on_line, INSTALL_TIMEOUT, env=env, cwd=workdir(user))
     if code != 0:
         raise InstallError(f"go install {pkg} failed (exit {code})")
 
@@ -239,19 +276,20 @@ async def clone_venv(git_url: str, dest: str, on_line: OnLine, user: str = "",
     is kept rather than discarded because tools like cloud_enum ship data files
     (wordlists, mutation lists) that a bare binary would lose.
     """
+    work = workdir(user)
     code = await _stream(as_user(user, ["git", "clone", "--depth", "1", git_url, dest]),
-                         on_line, INSTALL_TIMEOUT)
+                         on_line, INSTALL_TIMEOUT, cwd=work)
     if code != 0:
         raise InstallError(f"git clone failed (exit {code})")
     code = await _stream(as_user(user, ["python3", "-m", "venv", f"{dest}/.venv"]),
-                         on_line, INSTALL_TIMEOUT)
+                         on_line, INSTALL_TIMEOUT, cwd=work)
     if code != 0:
         raise InstallError(f"venv creation failed (exit {code})")
     req = f"{dest}/{requirements}"
     if os.path.isfile(req):
         code = await _stream(
             as_user(user, [f"{dest}/.venv/bin/pip", "install", "-r", req]),
-            on_line, INSTALL_TIMEOUT)
+            on_line, INSTALL_TIMEOUT, cwd=work)
         if code != 0:
             raise InstallError(f"pip install -r {requirements} failed (exit {code})")
 
@@ -283,7 +321,8 @@ async def capture_help(binary: str, user: str = "") -> str:
     """
     best, best_score = "", (0, 0)
     for flag in HELP_FLAGS:
-        _, out = await _capture(as_user(user, [binary, flag]), HELP_TIMEOUT)
+        _, out = await _capture(as_user(user, [binary, flag]), HELP_TIMEOUT,
+                                cwd=workdir(user))
         score = _help_score(out)
         if score > best_score:
             best, best_score = out, score
@@ -300,7 +339,8 @@ async def capture_version(binary: str, user: str = "") -> str:
     the same reason every map node records the tool and run that found it.
     """
     for flag in VERSION_FLAGS:
-        _, out = await _capture(as_user(user, [binary, flag]), QUICK_TIMEOUT)
+        _, out = await _capture(as_user(user, [binary, flag]), QUICK_TIMEOUT,
+                                cwd=workdir(user))
         line = (out or "").strip().splitlines()
         if line and any(ch.isdigit() for ch in line[0]):
             return line[0].strip()[:200]
@@ -321,18 +361,20 @@ async def verify(binary: str, user: str = "") -> tuple[str, str]:
 # -- remove ------------------------------------------------------------
 async def apt_remove(pkg: str, on_line: OnLine) -> None:
     await _stream(["apt-get", "remove", "-y", pkg], on_line, APT_TIMEOUT,
-                  env={"DEBIAN_FRONTEND": "noninteractive"})
+                  env={"DEBIAN_FRONTEND": "noninteractive"}, cwd=workdir())
 
 
 async def pipx_uninstall(name: str, on_line: OnLine, user: str = "") -> None:
-    home = f"/home/{user}" if user else os.path.expanduser("~")
+    home = home_of(user)
     await _stream(as_user(user, ["pipx", "uninstall", name]), on_line, APT_TIMEOUT,
                   env={"PIPX_HOME": f"{home}/.local/pipx",
-                       "PIPX_BIN_DIR": f"{home}/.local/bin"})
+                       "PIPX_BIN_DIR": f"{home}/.local/bin"},
+                  cwd=workdir(user))
 
 
 async def remove_path(path: str, on_line: OnLine, user: str = "") -> None:
     """For go-install binaries and clone+venv trees."""
     if not path or path in ("/", "/usr", "/usr/bin", "/home"):
         raise InstallError(f"refusing to remove {path!r}")
-    await _stream(as_user(user, ["rm", "-rf", "--", path]), on_line, QUICK_TIMEOUT)
+    await _stream(as_user(user, ["rm", "-rf", "--", path]), on_line, QUICK_TIMEOUT,
+                  cwd=workdir(user))

@@ -2,8 +2,8 @@
 
 The pipeline publishes status transitions and log lines; the server's SSE
 endpoint subscribes and forwards them to the browser. Keeping this separate
-means the pipeline doesn't know about HTTP and the server doesn't know about
-docker.
+means the pipeline doesn't know about HTTP and the server doesn't know how tools
+get installed.
 """
 from __future__ import annotations
 

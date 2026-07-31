@@ -265,7 +265,7 @@
     box-shadow:0 0 0 1px var(--accent); }
   .mapitem.open code{ color:var(--accent); }
   .mapnode{ display:flex; align-items:center; gap:8px; font-size:13px; }
-  /* `code` breaks anywhere globally, which is right for a docker image id and
+  /* `code` breaks anywhere globally, which is right for a long binary path and
      wrong for a hostname: it split www.example.com after the "de". The name
      takes the room it needs; the marks beside it stay on one line. */
   .mapnode code{ flex:1 1 auto; min-width:0; word-break:normal;
@@ -777,15 +777,15 @@ async function clearAll(){
 function renderClear(){}   // nothing to keep in sync now
 
 // Compose the whole failure into a prompt you can paste into a capable model,
-// then paste its Dockerfile straight back into the box above. Keeps a strong
-// model in the loop without an API key or any inference on this machine.
+// then paste its install command straight back into the box above. Keeps a
+// strong model in the loop without an API key or any inference on this machine.
 async function copyPrompt(id){
   const msg = document.getElementById(`manmsg-${id}`);
   try{
     const d = await (await fetch(`/tools/${id}/prompt`)).json();
     if(d.error){ msg.textContent = d.error; return; }
     await navigator.clipboard.writeText(d.prompt);
-    msg.textContent = "prompt copied — paste it to an AI, then paste the Dockerfile above";
+    msg.textContent = "prompt copied — paste it to an AI, then paste the command above";
   }catch(e){ msg.textContent = "couldn't copy (clipboard needs https or localhost)"; }
 }
 
@@ -794,14 +794,12 @@ async function sendManual(id){
   const msg = document.getElementById(`manmsg-${id}`);
   const text = (box.value||"").trim();
   if(!text){ msg.textContent = "paste something first"; return; }
-  // A full Dockerfile has to start with FROM; anything else is an install line.
-  const isDockerfile = /^\s*FROM\s/i.test(text);
   msg.textContent = "validating…";
   try{
     const d = await (await fetch(`/tools/${id}/install`,{method:"POST",
       headers:{"Content-Type":"application/json"},
-      body: JSON.stringify(isDockerfile ? {dockerfile:text} : {install_cmd:text})})).json();
-    msg.textContent = d.error ? d.error : "building…";
+      body: JSON.stringify({install_cmd:text})})).json();
+    msg.textContent = d.error ? d.error : "installing…";
   }catch(e){ msg.textContent = "request failed"; }
 }
 const drop  = id => confirm(`Remove ${id}?`) && fetch(`/tools/${id}`,{method:"DELETE"});
@@ -1111,7 +1109,7 @@ function renderView(){
               <span style="cursor:pointer" onclick="cancelCommand('${t.id}')">cancel</span>`
               : `<span style="cursor:pointer;color:var(--accent)"
                     onclick="editCommand('${t.id}')">edit</span>`} ·
-            runs inside ${esc(t.image)}</span></div>
+            runs ${esc(t.binary_path||t.entrypoint||t.id)}</span></div>
         <div class="fields">
           <input id="cmd-${t.id}" value="${esc(prefill)}" placeholder="${esc(hint)}"
                  ${editing ? "" : "readonly"}
@@ -1182,9 +1180,10 @@ function renderView(){
           <div>source</div><div><code>${esc(t.source_url)}</code></div>
           <div>section</div><div>${esc(t.section)}</div>
           <div>strategy</div><div>${esc(t.strategy||"—")}</div>
-          <div>image</div><div><code>${esc(t.image||"—")}</code></div>
+          <div>binary</div><div><code>${esc(t.binary_path||"—")}</code></div>
           <div>install</div><div><code>${esc(t.install_cmd||"—")}</code></div>
-          <div>commit</div><div><code>${esc(t.resolved_ref||"—")}</code> ${t.argv_mode?("· argv "+esc(t.argv_mode)):""}</div>
+          <div>version</div><div><code>${esc(t.version||"—")}</code></div>
+          <div>commit</div><div><code>${esc(t.resolved_ref||"—")}</code></div>
         </div>
         <div class="lbl" style="margin-top:10px"><span>Setup Log</span></div>
         <pre class="term" id="log-${t.id}">${ansiToHtml(clip(logs.get(t.id)))}</pre>
@@ -1192,14 +1191,14 @@ function renderView(){
         <div class="manual">
           <div class="lbl"><span>provide the install yourself</span></div>
           <div class="sub" style="margin-bottom:8px">
-            Copy the install line from the project&rsquo;s README &mdash; we clone the
-            repo and wrap it the same way as every other recipe. Paste a whole
-            Dockerfile only if one line can&rsquo;t express it.
+            Copy the install line from the project&rsquo;s README &mdash; it runs
+            through the same gate as every other recipe. One command, no shell:
+            pipes, <code>&amp;&amp;</code> and redirection are rejected.
           </div>
           <textarea id="man-${t.id}" rows="3" spellcheck="false"
-            placeholder="pip install -r requirements.txt&#10;&#10;&mdash; or a full Dockerfile starting with FROM">${esc(t.manual_dockerfile||t.manual_install||"")}</textarea>
+            placeholder="pip install -r requirements.txt">${esc(t.manual_install||"")}</textarea>
           <div class="fields" style="margin-top:8px">
-            <button onclick="event.stopPropagation();sendManual('${t.id}')">Build this</button>
+            <button onclick="event.stopPropagation();sendManual('${t.id}')">Install this</button>
             <button class="ghost" onclick="event.stopPropagation();copyPrompt('${t.id}')">Copy prompt for an AI</button>
             <span class="sub" id="manmsg-${t.id}"></span>
           </div>
@@ -3433,9 +3432,10 @@ function renderSettings(){
     <div class="card" style="padding:14px;border-color:var(--red)">
       <div class="sub" style="margin-bottom:10px">
         <b>Remove every installed tool.</b> Deletes all ${tools.size} tool
-        record${tools.size===1?"":"s"}, their Docker images, their per-tool
-        volumes and the cached repo data. Baseline tools rebuild on the next
-        start; anything you added yourself has to be re-added. Cannot be undone.
+        record${tools.size===1?"":"s"}, the binaries and checkouts they
+        installed, and the cached repo data. Baseline tools reinstall on the
+        next start; anything you added yourself has to be re-added. Cannot be
+        undone.
       </div>
       <div class="addrow">
         <input id="clearword" placeholder='type "delete" to confirm'

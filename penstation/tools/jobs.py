@@ -4,9 +4,10 @@ Setup takes minutes (compiles), so `POST /tools` must never block: it creates a
 record, enqueues a job, and returns immediately. This module owns the background
 worker that advances a record through the pipeline.
 
-Builds run SERIALLY — docker builds are heavy and interleaved logs are
-unreadable. Tools waiting behind an active build carry `queue_position > 0` so
-the UI can say "queued (position 2)" instead of showing an empty log.
+Installs run SERIALLY — compiles are heavy, two package managers touching the
+same box at once invite trouble, and interleaved logs are unreadable. Tools
+waiting behind an active install carry `queue_position > 0` so the UI can say
+"queued (position 2)" instead of showing an empty log.
 
 Stage functions are injected (see `Pipeline`), so this module stays about
 *orchestration* — the real gather/build/verify land in later steps.

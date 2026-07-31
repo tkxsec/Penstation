@@ -8,12 +8,12 @@ an API key, a network dependency, and a weak local model that measurably could
 not do it.
 
 So: compose the whole question here, you paste it wherever you already have a
-good model, and paste its answer back into the same box you'd type a Dockerfile
-into. No integration, no key, no inference on this machine.
+good model, and paste its answer back into the manual-install box. No
+integration, no key, no inference on this machine.
 
-The prompt carries penstation's real constraints (no build context, official
-base images, no fetch-execute), so an answer that follows it will pass
-validate_dockerfile rather than being rejected after a round trip.
+The prompt carries penstation's real constraints (one command, no shell, no
+fetch-execute), so an answer that follows it will pass validate_install rather
+than being rejected after a round trip.
 """
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ _NOISE = re.compile(
     r'site-packages/(pip|setuptools|pyproject_hooks)/', re.I)
 _SIGNAL = re.compile(
     r"error|failed|cannot|could not|no such|not found|no module|unable to|"
-    r"denied|fatal|>>>|^Dockerfile:|^#\d+ \[", re.I)
+    r"denied|fatal|>>>|requires go|note: module", re.I)
 _MAX_LINE = 400
 
 
@@ -55,45 +55,48 @@ def distill(log: str) -> str:
 def prompt_for(rec, tried: list[str] | None = None) -> str:
     """A self-contained prompt describing this failure, ready to paste."""
     attempts = "\n".join(f"  - {t}" for t in (tried or [])) or "  - (none recorded)"
-    errors = distill(rec.read_log(tail=400)) or "(no build output captured)"
-    last = (rec.dockerfile or "").strip()
-    last_block = f"\nThe last Dockerfile it tried:\n```dockerfile\n{last}\n```\n" if last else ""
+    errors = distill(rec.read_log(tail=400)) or "(no install output captured)"
+    last = (rec.manual_install or rec.install_cmd or "").strip()
+    last_block = f"\nThe last command it tried:\n```\n{last}\n```\n" if last else ""
 
-    return f"""I'm installing a command-line security tool into a Docker image and every \
-approach has failed. Write me a Dockerfile that works.
+    return f"""I'm installing a command-line security tool natively on a Debian-based \
+box (Kali) and every approach has failed. Give me an install command that works.
 
 Repository: {rec.source_url}
 
 What was already tried, and failed:
 {attempts}
 {last_block}
-The build errors:
+The install errors:
 ```
 {errors}
 ```
 
-Constraints — these are properties of my build system, not preferences:
-- The Dockerfile is piped to `docker build -`, so there is NO build context.
-  COPY and ADD from the local filesystem cannot work. Fetch the source with
-  `RUN git clone --depth 1 {rec.source_url} /src` and then set WORKDIR.
-- It must start with FROM, using an official base image (golang, python, node,
-  rust, alpine, debian, ubuntu).
-- Never pipe a download into a shell (`curl ... | sh`).
-- No `--mount=type=secret` or `--mount=type=ssh`.
-- Keep it under 60 instructions.
-- End with an ENTRYPOINT that runs the tool directly, so arguments passed to
-  `docker run <image> <args>` reach it.
+Constraints — these are properties of my installer, not preferences:
+- The result must be a SINGLE command, run as argv with NO shell. Pipes,
+  `&&`, `;`, redirection, backticks and `$(...)` are all rejected — if the fix
+  needs several steps, tell me the system packages to install first in prose and
+  give the one command separately.
+- It must start with one of: apt-get install, pipx install, pip install,
+  go install, git clone, cargo install, npm install, gem install, make.
+- Never pipe a download into a shell (`curl ... | sh`). curl and wget are
+  rejected outright in an install command.
+- No sudo/su in the command itself — privilege is handled by the installer.
+- It runs as an unprivileged account whose HOME is its own, so anything writing
+  outside that home will fail.
+- Afterwards a binary must be on PATH (or in ~/.local/bin or ~/go/bin), because
+  the next step resolves the command's absolute path and fails without it.
 - If the tool reads data files (wordlists, signatures, templates) that ship in
-  the repo, run it from the checkout rather than as an installed console
-  script — otherwise it resolves those paths relative to the wrong directory.
+  the repo, prefer a `git clone` so those files stay beside it — an installed
+  console script resolves those paths relative to the wrong directory.
 
-Two things that often matter for older tools:
-- An unpinned dependency set resolves against today's toolchain, which may have
-  broken compatibility since. A base image contemporary with the project can be
-  simpler than fighting it.
+Two things that often matter here:
+- A Go tool's module path is usually NOT `owner/repo` (subfinder is really
+  `github.com/projectdiscovery/subfinder/v2/cmd/subfinder`), and a recent tool
+  may need a newer Go toolchain than the distro ships — if so, say which.
 - A compile that fails on a missing header needs that library's -dev package,
   which the error usually names.
 
-Reply with just the Dockerfile in a single code block, and one sentence on what
-was actually wrong.
+Reply with the single install command in a code block, any system packages I
+need first, and one sentence on what was actually wrong.
 """

@@ -41,17 +41,11 @@ def token() -> str:
     return settings.github_token()
 
 
-def _headers(host: str = _API) -> dict[str, str]:
-    """Request headers. Credentials go to GitHub and nowhere else.
-
-    The published-image probe talks to hub.docker.com through the same helper.
-    Attaching the GitHub token to that request sent the credential to a third
-    party, and Docker Hub answered 401 — which surfaced as "GitHub rejected the
-    token", so replacing the token could never fix it.
-    """
+def _headers() -> dict[str, str]:
+    """Request headers. Credentials go to GitHub and nowhere else."""
     h = {"User-Agent": "penstation", "Accept": "application/vnd.github+json"}
     tok = token()
-    if tok and host == _API:
+    if tok:
         h["Authorization"] = f"Bearer {tok}"
     return h
 
@@ -98,106 +92,35 @@ def quota_note() -> str:
     auth = "token" if token() else "unauthenticated"
     return f"github: {remaining}/{limit} requests left ({auth}, resets in {mins}m)"
 
-# Ecosystem detection: marker file -> (ecosystem, docker base image)
+# Ecosystem detection: marker file -> ecosystem
 ECOSYSTEMS = {
-    "go.mod": ("go", "golang:alpine"),
-    "pyproject.toml": ("pip", "python:3.13-slim"),
-    "setup.py": ("pip", "python:3.13-slim"),
-    "requirements.txt": ("pip", "python:3.13-slim"),
-    "package.json": ("npm", "node:alpine"),
-    "cargo.toml": ("cargo", "rust:slim"),
+    "go.mod": "go",
+    "pyproject.toml": "pip",
+    "setup.py": "pip",
+    "requirements.txt": "pip",
+    "package.json": "npm",
+    "cargo.toml": "cargo",
 }
 
 # Fallback when no marker file is present — plenty of older repos predate them
 # (e.g. pre-modules Go tools with no go.mod). GitHub still tells us the language.
 LANGUAGES = {
-    "go": ("go", "golang:alpine"),
-    "python": ("pip", "python:3.13-slim"),
-    "javascript": ("npm", "node:alpine"),
-    "typescript": ("npm", "node:alpine"),
-    "rust": ("cargo", "rust:slim"),
+    "go": "go",
+    "python": "pip",
+    "javascript": "npm",
+    "typescript": "npm",
+    "rust": "cargo",
 }
-
-# Headers that Python packages with C extensions link against. Installing them
-# up front is a build-environment decision, the same kind as installing git and
-# a compiler — not knowledge about any particular tool.
-#
-# Without these a compile fails on a missing header rather than anything to do
-# with the repo: GitGot's ssdeep dies on "fatal error: fuzzy.h: No such file or
-# directory", and the error names a Debian package nothing in the pipeline knows
-# to install. The list is curated and will be incomplete; extend it when a build
-# fails on a missing .h.
-C_EXT_HEADERS = ("libffi-dev", "libssl-dev", "zlib1g-dev", "libxml2-dev",
-                 "libxslt1-dev", "libjpeg-dev", "libpq-dev", "libfuzzy-dev")
-
-# Alpine equivalents for the go/npm images, which use apk. `build-base` is the
-# compiler toolchain — cgo and npm native modules need it, and without it a
-# build dies on a missing gcc rather than anything about the repo.
-C_EXT_HEADERS_APK = ("build-base", "libffi-dev", "openssl-dev", "zlib-dev",
-                     "libxml2-dev", "libxslt-dev", "jpeg-dev")
-
-
-def _apk_deps() -> str:
-    return "git ca-certificates " + " ".join(C_EXT_HEADERS_APK)
-
-
-# Base images by the year a repo was last touched.
-#
-# An unpinned repo resolves its dependencies against whatever the toolchain
-# offers *today*, and toolchains break compatibility over time — setuptools 81
-# deleted pkg_resources, Go 1.16 made modules mandatory, npm 7 started enforcing
-# peer deps. Building a 2021 repo on a 2026 base image manufactures failures the
-# authors never had. Rebuilding on its own era's image removes them: GitGot
-# needs PIP_CONSTRAINT gymnastics on python:3.14 and builds unmodified on
-# python:3.9, because 3.9 ships the setuptools its requirements were written for.
-ERA_BASES = {
-    "pip":   ((2019, "python:3.7-slim"), (2020, "python:3.8-slim"),
-              (2022, "python:3.9-slim"), (2024, "python:3.11-slim"),
-              (9999, "python:3.13-slim")),
-    "go":    ((2019, "golang:1.13-alpine"), (2021, "golang:1.17-alpine"),
-              (2023, "golang:1.21-alpine"), (9999, "golang:alpine")),
-    "npm":   ((2019, "node:12-alpine"), (2021, "node:16-alpine"),
-              (2023, "node:20-alpine"), (9999, "node:alpine")),
-    "cargo": ((2021, "rust:1.56-slim"), (2023, "rust:1.72-slim"),
-              (9999, "rust:slim")),
-}
-
 
 # The file whose age actually decides which toolchain a repo expects.
 MANIFESTS = ("requirements.txt", "pyproject.toml", "setup.py", "go.mod",
              "package.json", "cargo.toml")
 
 
-def era_base(sig: Signals) -> str | None:
-    """A base image contemporary with the repo's *dependencies*.
-
-    Dated by the manifest, not by the last commit — those diverge badly and the
-    manifest is the one that matters. GitGot's last commit is 2024, but its
-    requirements.txt has not been touched since 2019: a README fix does not mean
-    anyone retested the dependency set. Dating by the repo would have picked a
-    modern base and reproduced the exact failure we are trying to avoid.
-
-    None when we don't know the date or the era image matches the modern one —
-    in both cases a second attempt would build the identical thing.
-    """
-    eco, modern = sig.ecosystem()
-    when = sig.deps_dated or sig.committed
-    if not eco or not when:
-        return None
-    try:
-        year = int(when[:4])
-    except ValueError:
-        return None
-    for cutoff, image in ERA_BASES.get(eco, ()):
-        if year < cutoff:
-            return None if image == modern else image
-    return None
-
-
 # Install verbs we recognize when reading a README.
 _INSTALL_VERBS = (
     "go install", "go get", "pip install", "pip3 install", "pipx install",
-    "npm install", "npm i", "cargo install", "docker pull", "docker build",
+    "npm install", "npm i", "cargo install",
 )
 
 
@@ -222,15 +145,11 @@ class Signals:
     def repo_url(self) -> str:
         return f"https://github.com/{self.owner}/{self.repo}"
 
-    @property
-    def has_dockerfile(self) -> bool:
-        return "dockerfile" in self.files
-
-    def ecosystem(self) -> tuple[str, str] | tuple[None, None]:
-        for marker, (eco, base) in ECOSYSTEMS.items():
+    def ecosystem(self) -> str | None:
+        for marker, eco in ECOSYSTEMS.items():
             if marker in self.files:
-                return eco, base
-        return LANGUAGES.get((self.language or "").lower(), (None, None))
+                return eco
+        return LANGUAGES.get((self.language or "").lower())
 
     @property
     def packaged(self) -> bool:
@@ -272,26 +191,17 @@ def _note_limits(headers) -> None:
 
 # Set once a token is rejected, so we stop sending it for the rest of the run
 # instead of re-failing on every call.
-def _get(path: str, host: str = _API):
-    # Only GitHub's quota goes in the shared counter. Docker Hub answers the
-    # published-image probe with its own X-RateLimit headers (180 per 6h for
-    # anonymous), and recording those made the UI report "178/180 requests left"
-    # as if the GitHub token were nearly spent.
-    mine = host == _API
+def _get(path: str):
     try:
-        req = urllib.request.Request(host + path, headers=_headers(host))
+        req = urllib.request.Request(_API + path, headers=_headers())
         with urllib.request.urlopen(req, timeout=12) as resp:
-            if mine:
-                _note_limits(resp.headers)
+            _note_limits(resp.headers)
             return json.loads(resp.read())
     except urllib.error.HTTPError as exc:
-        if mine:
-            _note_limits(exc.headers or {})
+        _note_limits(exc.headers or {})
         # A bad token must not masquerade as "repo not found" — that sends you
-        # hunting for the wrong problem entirely. Only GitHub can reject a
-        # GitHub token, though: other hosts 401 for their own reasons and must
-        # not be reported as an auth problem you can fix.
-        if exc.code == 401 and mine:
+        # hunting for the wrong problem entirely.
+        if exc.code == 401:
             raise GatherError(
                 "GitHub rejected the token (401). Check or replace it in Settings."
             ) from None
@@ -433,7 +343,9 @@ def gather(url: str, use_cache: bool = True) -> Signals:
                     .get("date") or "")
             sig.committed = when[:10]
 
-    # Date the dependency manifest separately — it is what era_base keys on.
+    # Date the dependency manifest separately — it diverges from the last commit
+    # (a README fix does not mean anyone retested the dependency set) and it is
+    # the honest answer to "how old is what this actually installs".
     manifest = next((m for m in MANIFESTS if m in sig.files), "")
     if manifest and rate_limit.get("remaining", 999) > 5:
         hist = _get(f"/repos/{owner}/{repo}/commits?path={manifest}&per_page=1")
@@ -443,44 +355,6 @@ def gather(url: str, use_cache: bool = True) -> Signals:
 
     _cache_write(sig)
     return sig
-
-
-# -- published image discovery ----------------------------------------
-def find_published_image(sig: Signals) -> str | None:
-    """Find a prebuilt image, CORROBORATED by the repo's own docs.
-
-    Discovery is by reading the README's own `docker pull/run` lines rather than
-    guessing `owner/repo` — guessing could land on a squatted image and we would
-    happily run it. We then require the name to reference the owner or repo, and
-    (for Docker Hub) confirm it actually exists.
-    """
-    text = sig.readme or ""
-    candidates: list[str] = []
-    # Scan every token after `docker pull|run`, skipping flags and their values —
-    # `docker run -it owner/tool` must not stop at `-it`.
-    for m in re.finditer(r"docker\s+(?:pull|run)\s+([^\n`]*)", text, re.I):
-        for tok in m.group(1).split():
-            if tok.startswith("-"):
-                continue
-            if tok in ("\\", "|"):
-                break
-            candidates.append(tok.strip("\"'"))
-
-    owner_l, repo_l = sig.owner.lower(), sig.repo.lower()
-    for ref in candidates:
-        base = ref.split("@")[0].split(":")[0].lower()
-        if repo_l not in base and owner_l not in base:
-            continue  # not corroborated as this project's image
-        if base.startswith(("ghcr.io/", "public.ecr.aws/", "quay.io/")):
-            return ref  # namespaced registry; the path itself is the corroboration
-        if "/" in base and _dockerhub_exists(base):
-            return ref
-    return None
-
-
-def _dockerhub_exists(name: str) -> bool:
-    ns, _, repo = name.partition("/")
-    return _get(f"/v2/repositories/{ns}/{repo}/", host="https://hub.docker.com") is not None
 
 
 # -- command extraction from the repo's own docs ----------------------
@@ -577,7 +451,7 @@ def target_kind(sig: Signals) -> str:
     return "domain"
 
 
-# -- deterministic Dockerfile template ---------------------------------
+# -- install-command synthesis -----------------------------------------
 def normalize_install(sig: Signals, cmd: str) -> str:
     """Modernize known-deprecated install forms.
 
@@ -585,26 +459,12 @@ def normalize_install(sig: Signals, cmd: str) -> str:
     requires `go install <pkg>@latest`. This is a mechanical, well-understood
     migration, not a guess.
     """
-    eco, _ = sig.ecosystem()
-    if eco == "go" and re.match(r"^go\s+get\b", cmd.strip(), re.I):
+    if sig.ecosystem() == "go" and re.match(r"^go\s+get\b", cmd.strip(), re.I):
         pkg = cmd.split()[-1]
         if "@" not in pkg:
             pkg += "@latest"
         return f"go install {pkg}"
     return cmd
-
-
-def fetch_dockerfile(sig: Signals) -> str:
-    """The repo's own Dockerfile text.
-
-    Not needed to *build* it (docker builds straight from the git URL), but it
-    is the best seed material there is for a repair: it carries the repo's real
-    dependency knowledge (GitGot's Dockerfile knows ssdeep needs autoconf and
-    libffi-dev) even when it has bit-rotted.
-    """
-    if not sig.has_dockerfile:
-        return ""
-    return _raw(sig.owner, sig.repo, sig.default_branch, "Dockerfile") or ""
 
 
 def canonical_install(sig: Signals) -> str | None:
@@ -613,10 +473,10 @@ def canonical_install(sig: Signals) -> str | None:
     A last-resort guess for when the README documents nothing we can parse. It
     is a guess — `pip install git+<url>` only works if the repo is actually
     packaged — but it costs nothing, needs no model, and is right often enough
-    to be worth trying before giving up. If it's wrong the build fails and the
-    repair loop takes over.
+    to be worth trying before giving up. If it's wrong the recipe fails and the
+    ladder falls through to the next one.
     """
-    eco, _ = sig.ecosystem()
+    eco = sig.ecosystem()
     url = sig.repo_url
     if eco == "pip":
         # Prefer a checkout whenever the repo has a `<name>.py` at its root,
@@ -630,8 +490,8 @@ def canonical_install(sig: Signals) -> str | None:
                     if "requirements.txt" in sig.files else "pip install .")
         return f"pip install git+{url}"
     if eco == "go":
-        # Pre-modules repos can't `go install`; generate_dockerfile has a clone
-        # recipe for them and ignores this command entirely.
+        # Pre-modules repos can't `go install` at all — there is no go.mod for it
+        # to resolve — so they fall through to the clone rung instead.
         return f"go install {url.removeprefix('https://')}@latest" if sig.go_modules \
             else f"git clone --depth 1 {url}"
     if eco == "cargo":
@@ -640,64 +500,3 @@ def canonical_install(sig: Signals) -> str | None:
         return f"npm install -g {url}"
     return None
 
-
-def generate_dockerfile(sig: Signals, install_cmd: str,
-                        base_override: str = "") -> str | None:
-    """A Dockerfile for the detected ecosystem. Our own trusted template —
-    the untrusted part is `install_cmd`, which the validator already gated.
-
-    `base_override` swaps the base image (see era_base) without changing the
-    recipe, so an old repo can be retried against its own era's toolchain.
-    """
-    eco, base = sig.ecosystem()
-    base = base_override or base
-    if not eco:
-        return None
-    name = sig.repo.lower()
-
-    # Pre-modules Go repo: `go install pkg@latest` can't work without a go.mod,
-    # so clone and initialize a module before building.
-    if eco == "go" and not sig.go_modules:
-        return (
-            f"FROM {base}\n"
-            f"RUN apk add --no-cache {_apk_deps()}\n"
-            f"RUN git clone --depth 1 {sig.repo_url} /src\n"
-            "WORKDIR /src\n"
-            f"RUN go mod init {name} && go mod tidy && "
-            f"go build -o /usr/local/bin/{name} .\n"
-            f'ENTRYPOINT ["{name}"]\n'
-        )
-
-    # Script-shaped Python repo: nothing to `pip install`, so clone it, install
-    # its requirements, and run the script directly.
-    if eco == "pip" and (sig.entry_script
-                         or (not sig.packaged
-                             and re.search(r"(^|\s)(-r|--requirement)", install_cmd))):
-        script = sig.entry_script or f"{name}.py"
-        return (
-            f"FROM {base}\n"
-            "RUN apt-get update && apt-get install -y --no-install-recommends "
-            f"git build-essential {' '.join(C_EXT_HEADERS)} "
-            "&& rm -rf /var/lib/apt/lists/*\n"
-            f"RUN git clone --depth 1 {sig.repo_url} /src\n"
-            "WORKDIR /src\n"
-            f"RUN {install_cmd}\n"
-            f'ENTRYPOINT ["python", "{script}"]\n'
-        )
-
-    lines = [f"FROM {base}"]
-    if eco == "go":
-        lines.append(f"RUN apk add --no-cache {_apk_deps()}")
-    elif eco == "pip":
-        lines.append("RUN apt-get update && apt-get install -y --no-install-recommends "
-                     f"git build-essential {' '.join(C_EXT_HEADERS)} "
-                     "&& rm -rf /var/lib/apt/lists/*")
-    elif eco == "npm":
-        lines.append(f"RUN apk add --no-cache {_apk_deps()} python3")
-    elif eco == "cargo":
-        lines.append("RUN apt-get update && apt-get install -y --no-install-recommends "
-                     f"git build-essential pkg-config {' '.join(C_EXT_HEADERS)} "
-                     "&& rm -rf /var/lib/apt/lists/*")
-    lines.append(f"RUN {install_cmd}")
-    lines.append(f'ENTRYPOINT ["{name}"]')
-    return "\n".join(lines) + "\n"

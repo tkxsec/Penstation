@@ -34,10 +34,11 @@ SECTIONS = [
 # The baseline toolset — what an external engagement is run with, installed into
 # every project so the map has something to fill it in from the moment you start.
 #
-# These are declared as Dockerfiles rather than GitHub repos on purpose. nmap,
-# dig, curl and openssl are distro packages, not repositories, so the install
-# ladder has nothing to inspect — and pinning the base image is what makes the
-# baseline actually reliable rather than merely old.
+# These carry a declared `install` recipe rather than a GitHub repo on purpose.
+# nmap, dig, curl and openssl are distro packages, not repositories, so the
+# install ladder has nothing to inspect — and the declared spec carries the
+# pinned version where one matters (bbot==3.0.1, subfinder@v2.14.0), which the
+# ladder would otherwise resolve to whatever is current today.
 #
 # `check` is the coverage kind this tool satisfies, so nmap and masscan both
 # count as a port scan.
@@ -88,21 +89,6 @@ BACKBONE = [
         # are all output).
         "output_files": ["output.*", "subdomains.txt"],
         "install": {"kind": "pipx", "pkg": "bbot==3.0.1", "binary": "bbot"},
-        "dockerfile": (
-            "FROM python:3.12-slim\n"
-            "RUN apt-get update && apt-get install -y --no-install-recommends "
-            "git build-essential && rm -rf /var/lib/apt/lists/*\n"
-            # bbot 2.1.0 declared `dnspython<3.0.0,>=2.4.2` — unbounded in
-            # practice — so pip installed dnspython 2.8.0 against a release that
-            # predates it. The result was a stream of
-            #   dnsresolve.py:235 resolve_event(): cannot unpack non-iterable object
-            # on every DNS event. 3.0.1 constrains it to <2.9.0,>=2.7.0.
-            #
-            # dnspython is pinned too: pinning only the direct dependency is what
-            # allowed the drift in the first place.
-            "RUN pip install --no-cache-dir bbot==3.0.1 dnspython==2.8.0\n"
-            'ENTRYPOINT ["bbot"]\n'
-        ),
     },
     {
         # No "source": github.com/projectdiscovery/subfinder is where the pinned
@@ -139,16 +125,6 @@ BACKBONE = [
         # queried over HTTPS, and without it subfinder fails on all of them.
         "install": {"kind": "go-install", "binary": "subfinder",
                     "pkg": "github.com/projectdiscovery/subfinder/v2/cmd/subfinder@v2.14.0"},
-        "dockerfile": (
-            "FROM golang:1.24-alpine AS build\n"
-            "RUN apk add --no-cache git\n"
-            "RUN go install -v github.com/projectdiscovery/subfinder/v2/"
-            "cmd/subfinder@v2.14.0\n"
-            "FROM alpine:3.20\n"
-            "RUN apk add --no-cache ca-certificates\n"
-            "COPY --from=build /go/bin/subfinder /usr/local/bin/subfinder\n"
-            'ENTRYPOINT ["subfinder"]\n'
-        ),
     },
     {
         "id": "dig",
@@ -161,11 +137,6 @@ BACKBONE = [
         # be built at all. `+noall +answer` keeps name and address on one line.
         "run": "dig -f {{input}} +noall +answer",
         "install": {"kind": "apt", "pkg": "dnsutils", "binary": "dig"},
-        "dockerfile": (
-            "FROM alpine:3.20\n"
-            "RUN apk add --no-cache bind-tools\n"
-            'ENTRYPOINT ["dig"]\n'
-        ),
     },
     {
         "id": "nmap",
@@ -202,11 +173,6 @@ BACKBONE = [
         # evidence; this only narrows what promotion reads.
         "result_file": "scan.xml",
         "install": {"kind": "apt", "pkg": "nmap", "binary": "nmap"},
-        "dockerfile": (
-            "FROM alpine:3.20\n"
-            "RUN apk add --no-cache nmap nmap-scripts\n"
-            'ENTRYPOINT ["nmap"]\n'
-        ),
     },
     {
         "id": "httpx",
@@ -264,16 +230,6 @@ BACKBONE = [
         # v1.10.0 asks for go 1.26.
         "install": {"kind": "go-install", "binary": "httpx",
                     "pkg": "github.com/projectdiscovery/httpx/cmd/httpx@v1.10.0"},
-        "dockerfile": (
-            "FROM golang:1.26-alpine AS build\n"
-            "RUN apk add --no-cache git\n"
-            "RUN go install -v github.com/projectdiscovery/httpx/"
-            "cmd/httpx@v1.10.0\n"
-            "FROM alpine:3.20\n"
-            "RUN apk add --no-cache ca-certificates\n"
-            "COPY --from=build /go/bin/httpx /usr/local/bin/httpx\n"
-            'ENTRYPOINT ["httpx"]\n'
-        ),
     },
     {
         "id": "curl",
@@ -300,11 +256,6 @@ BACKBONE = [
         # -S keeps errors visible.
         "run": "curl -sSILv --max-time 10 https://{{target}}",
         "install": {"kind": "apt", "pkg": "curl", "binary": "curl"},
-        "dockerfile": (
-            "FROM alpine:3.20\n"
-            "RUN apk add --no-cache curl ca-certificates\n"
-            'ENTRYPOINT ["curl"]\n'
-        ),
     },
     {
         "id": "openssl",
@@ -316,11 +267,6 @@ BACKBONE = [
         "targets": ["domain", "host"],
         "run": "openssl s_client -connect {{target}}:443 -servername {{target}}",
         "install": {"kind": "apt", "pkg": "openssl", "binary": "openssl"},
-        "dockerfile": (
-            "FROM alpine:3.20\n"
-            "RUN apk add --no-cache openssl\n"
-            'ENTRYPOINT ["openssl"]\n'
-        ),
     },
 ]
 

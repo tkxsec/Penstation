@@ -11,10 +11,10 @@
     GET  /projects            engagements + their section/tool assignments
     POST /projects            create one
     POST /tools/{id}/retry    re-run setup for a failed tool
-    DELETE /tools/{id}        drop the record (and its image)
+    DELETE /tools/{id}        drop the record (and the binary it installed)
     DELETE /tools             drop everything, including cached repo signals
 
-`POST /tools` never blocks: docker builds take minutes, so it enqueues and returns.
+`POST /tools` never blocks: an install takes minutes, so it enqueues and returns.
 """
 from __future__ import annotations
 
@@ -41,8 +41,8 @@ from penstation.tools.gather import GatherError, parse_url
 from penstation.tools.jobs import JobQueue
 from penstation.tools.pipeline import Pipeline
 from penstation.tools.runner import RunError
-from penstation.tools.validate import (validate_command, validate_dockerfile,
-                                          validate_input, validate_install)
+from penstation.tools.validate import (validate_command, validate_input,
+                                          validate_install)
 
 WEB = Path(__file__).parent / "web"
 
@@ -390,10 +390,10 @@ def _settings_state() -> dict:
 def ensure_baseline(kind: str = "") -> dict:
     """Make sure every engagement type's baseline exists in the library.
 
-    Images are global, so this builds each baseline tool **once ever** — not
-    once per engagement. Called at startup so cloning the repo and starting the
-    server is all it takes; a project created later just points at what is
-    already built.
+    The tool library is global, so this installs each baseline tool **once
+    ever** — not once per engagement. Called at startup so cloning the repo and
+    starting the server is all it takes; a project created later just points at
+    what is already installed.
     """
     queued, reused = [], []
     kinds = [kind] if kind else list(engagements.TYPES)
@@ -494,9 +494,9 @@ async def _add_tool(payload: dict) -> dict:
 
     tool_id = store.slug(repo)
     if store.exists(tool_id):
-        # The image already exists in the library — nothing to build, just file
-        # it into this engagement. Rebuilding a shared image per project would
-        # cost minutes for an identical artifact.
+        # The tool is already in the library — nothing to install, just file it
+        # into this engagement. Reinstalling a shared tool per project would
+        # cost minutes for an identical result.
         if proj.assign(section, tool_id):
             proj.save()
             return {**(store.load(tool_id).to_dict()), "assigned": True}
@@ -715,24 +715,22 @@ def make_handler():
                 rec = store.load(parts[1])
                 p = _json_body(body)
                 cmd = (p.get("install_cmd") or "").strip()
-                dockerfile = (p.get("dockerfile") or "").strip()
                 if rec is None:
                     writer.write(_ok({"error": "unknown tool"}))
-                elif not cmd and not dockerfile:
+                elif not cmd:
                     writer.write(_ok({"error": "nothing provided"}))
                 else:
                     # Same gates as any derived recipe, minus the "must name the
                     # repo" rule — you are the authority on your own input, but
                     # shell-injection hygiene still applies.
-                    check = (validate_dockerfile(dockerfile) if dockerfile
-                             else validate_install(cmd))
+                    check = validate_install(cmd)
                     if not check:
                         writer.write(_ok({"error": check.reason}))
                     else:
-                        rec.manual_install, rec.manual_dockerfile = cmd, dockerfile
+                        rec.manual_install = cmd
                         rec.save()
                         rec.append_log(f"\n--- using the recipe you provided ---\n"
-                                       f"{dockerfile or cmd}\n")
+                                       f"{cmd}\n")
                         out(_paint(f"[{rec.id}] manual recipe supplied", "green"))
                         queue.submit(rec)
                         writer.write(_ok(rec.to_dict()))
@@ -745,8 +743,9 @@ def make_handler():
 
             elif (method == "POST" and len(parts) == 3 and parts[0] == "projects"
                   and parts[2] == "baseline"):
-                # Materialise the engagement type's baseline toolset. Images are
-                # shared, so a second project reuses whatever is already built.
+                # Materialise the engagement type's baseline toolset. The tool
+                # library is shared, so a second project reuses whatever is
+                # already installed.
                 proj = projects.load(parts[1])
                 if proj is None:
                     writer.write(_ok({"error": "unknown project"}))
@@ -1253,7 +1252,7 @@ def make_handler():
                 # run and the files those runs retained. The engagement itself
                 # stays — client, scope, notes, and which tools sit in which
                 # phase — because this is for starting the work again, not
-                # setting it up again. Installed images are shared between
+                # setting it up again. Installed tools are shared between
                 # engagements and are never touched here; uninstalling lives
                 # under Add Tool.
                 proj = projects.load(parts[1])
@@ -1282,7 +1281,7 @@ def make_handler():
                 if proj is None:
                     writer.write(_ok({"error": "unknown project"}))
                 elif method == "DELETE":
-                    # Images are shared, so removing an engagement never
+                    # The tool library is shared, so removing an engagement never
                     # uninstalls anything — it only drops the assignments.
                     projects.delete(parts[1])
                     runs.forget_project(parts[1])
@@ -1336,8 +1335,9 @@ def make_handler():
                     writer.write(_ok(rec.to_dict()))
 
             elif method == "DELETE" and len(parts) == 1 and parts[0] == "tools":
-                # Start fresh: every record, its image, its per-tool volume, and
-                # the cached repo signals. Destructive, so the UI confirms first.
+                # Start fresh: every record, the binary or checkout it installed,
+                # and the cached repo signals. Destructive, so the UI confirms
+                # first.
                 removed = []
                 for rec in store.load_all():
                     await _uninstall(rec)

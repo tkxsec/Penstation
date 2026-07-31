@@ -206,9 +206,10 @@ control characters.
 
 | | |
 |---|---|
-| `dockerops.py` | replaced by a native installer with the same interface: install, verify, remove, stream |
-| `build_argv()` | returns the bare command instead of wrapping it in `docker run` |
-| `ToolRecord` | stores a resolved binary path and `--version` output instead of an image tag |
+| `dockerops.py` | **removed.** `nativeops.py` carries the same interface: install, verify, remove, stream |
+| `build_argv()` | returns the bare command; there is no `docker run` to wrap it in |
+| `ToolRecord` | stores a resolved binary path and `--version` output; the image and Dockerfile fields are gone |
+| `validate.py` | `validate_dockerfile()` removed — with nothing sandboxed, `validate_install()` is the only barrier |
 | new | **reinstall all**, replaying every tool record onto a fresh box |
 | new | `{{wordlist:…}}` and `{{key:…}}`, resolved server-side like pace |
 
