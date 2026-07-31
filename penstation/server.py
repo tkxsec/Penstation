@@ -902,6 +902,23 @@ def make_handler():
                 # to tell "this port is newly open" from "this port the map
                 # holds came back filtered this time".
                 found = gmap.classify_all(text, known=frozenset(m.nodes))
+                # A wildcard a tool declared somewhere other than the file it is
+                # promoted from, offered as a row of its own.
+                #
+                # It has to be a row, not just a note. The tag that makes every
+                # later tool's names fold is applied when a row carrying
+                # `wildcard` is promoted, so a fact that never becomes a row
+                # never reaches the map — and the next tool, which has no event
+                # log of its own, reports every name underneath as a separate
+                # finding. bbot detects the wildcard and subfinder trips over it;
+                # that only works if the first one is recorded.
+                for parent in sorted(_declared_wildcards(run)):
+                    if not any(r["kind"] == "domain"
+                               and gmap.canon_domain(r["value"]) == parent
+                               and r.get("wildcard") for r in found["rows"]):
+                        found["rows"].append({"line": f"*.{parent}",
+                                              "kind": "domain", "value": parent,
+                                              "wildcard": True})
                 # One scope verdict, from the same function the map view uses.
                 # Deriving a weaker one here is what made every port a scan
                 # found arrive "outside scope": no domain rule matches an IP, so
@@ -919,15 +936,10 @@ def make_handler():
                 # reports every name underneath.
                 wilds = {gmap.canon_domain(n.value) for n in m.nodes.values()
                          if gmap.WILDCARD in n.tags}
+                # Including the ones added above from a run's event log, so a
+                # single bbot run folds its own findings on the first pass.
                 wilds |= {gmap.canon_domain(r["value"]) for r in found["rows"]
                           if r.get("wildcard")}
-                # And the ones declared in a file the run kept but is not
-                # promoted from. A tool that names its result file is read there
-                # and nowhere else, which is right for findings and wrong for
-                # this: bbot puts the names in subdomains.txt and the wildcard in
-                # its event log, so reading only the declared file means the
-                # wildcard is never seen and nothing folds. Facts, not rows.
-                wilds |= _declared_wildcards(run)
 
                 seen, rows, folded = set(), [], {}
                 for r in found["rows"]:
