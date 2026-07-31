@@ -1,7 +1,7 @@
 """Gather — deterministic repo signals, no LLM.
 
 Fetches what a repo tells us about itself and extracts install/run commands from
-its own documentation. Per docs/architecture.md we EXTRACT rather than synthesize:
+its own documentation. We EXTRACT rather than synthesize:
 `go install github.com/owner/repo@latest` fails for most real Go tools (subfinder
 is really `.../subfinder/v2/cmd/subfinder@latest`), but the README states the true
 command verbatim.

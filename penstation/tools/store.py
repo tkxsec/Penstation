@@ -1,7 +1,7 @@
 """Tool record + file-per-tool store.
 
 The ToolRecord is the contract every pipeline stage reads and writes (see
-docs/architecture.md). Storage is one JSON file per tool plus a sibling
+docs/external-design.md). Storage is one JSON file per tool plus a sibling
 append-only log, so build output can grow without rewriting the record.
 
     data/tools/<id>.json     the record

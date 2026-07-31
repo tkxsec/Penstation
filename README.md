@@ -9,39 +9,64 @@ Two halves that meet at the map:
 - **the engagement** — a scope, a graph of what you have found, phases that run
   a baseline toolset against it, and a record of every run as evidence
 - **the tool library** — paste a GitHub link and it works out how to install the
-  tool in Docker, verifies it, and makes it runnable alongside the baseline
+  tool, verifies it, and makes it runnable alongside the baseline
 
-Design notes: [`docs/architecture.md`](docs/architecture.md) for the system,
-[`docs/parsers.md`](docs/parsers.md) for how tool output becomes map nodes.
+Design notes: [`docs/external-design.md`](docs/external-design.md) for how it is
+deployed and run, [`docs/parsers.md`](docs/parsers.md) for how tool output
+becomes map nodes.
 
 ## Run
 
+penstation runs **on the engagement box** — the VM provisioned for the job, which
+has the address the client whitelisted and holds the evidence.
+
 ```bash
-python3 serve.py                 # http://127.0.0.1:8787
+sudo ./scripts/setup-box.sh      # once per box: install methods, unprivileged accounts
+python3 serve.py                 # or `penstation` after pip install -e .
 ```
 
-Needs Docker running — every tool is a Docker image.
+Reach the UI over the SSH session you already have:
+
+```
+Host engagement
+  HostName <the VM's hostname>
+  Port <ssh port>
+  User <your account>
+  LocalForward 8787 127.0.0.1:8787
+  ExitOnForwardFailure yes
+  ServerAliveInterval 30
+```
+
+`ssh engagement`, then `http://127.0.0.1:8787`.
+
+**Nothing is published.** penstation has no authentication — one route accepts a
+repository URL and installs it, another executes a command — so binding anywhere
+but loopback puts a root-capable web interface on a public address. The CLI
+refuses to do it without an explicit override, and the SSH key is what gates
+access instead. Run it under `tmux` so a dropped connection does not take a scan
+with it.
 
 **A GitHub token is required to add tools.** Unauthenticated GitHub allows ~60
-API requests an hour and trips abuse detection, which can get your whole IP
+API requests an hour and trips abuse detection, which can get the whole IP
 dropped, so adding is refused rather than burning it. A fine-grained PAT with
-**no scopes** is enough for public repositories (github.com → Settings →
-Developer settings → Personal access tokens):
+**no scopes** is enough for public repositories:
 
 ```bash
 export PENSTATION_GITHUB_TOKEN=github_pat_...   # or GITHUB_TOKEN / GH_TOKEN
-python3 serve.py
 ```
 
 It can also be saved in Settings, where it is written `0600` and never echoed
-back. The baseline toolset needs no token — those are declared Dockerfiles, not
+back. The baseline toolset needs no token — those are declared package names, not
 repositories.
 
 | variable | what it does |
 |---|---|
 | `PENSTATION_GITHUB_TOKEN` / `GITHUB_TOKEN` / `GH_TOKEN` | raises the API limit to 5,000/hr |
 | `PENSTATION_DATA` | where state lives (default: `data/` beside the code) |
-| `PENSTATION_EXTRA_INSTALL_VERBS` | extend the install-command allowlist without editing code |
+| `PENSTATION_INSTALL_USER` | unprivileged account installs run as |
+| `PENSTATION_RUN_USER` | unprivileged account tools run as |
+| `PENSTATION_RUNGS` | restrict the install ladder, e.g. `apt` |
+| `PENSTATION_EXTRA_INSTALL_VERBS` | extend the install-command allowlist |
 
 ## The engagement
 
@@ -65,10 +90,10 @@ node.
 
 ## Phases
 
-An external test runs through these phases. The **baseline** is what each is run
-with, installed into every engagement; the ones with no baseline tool are places
-to put what you add. Passive Recon, Active Recon, Cloud Resources and GitHub
-Resources share one **Reconnaissance** entry in the sidebar:
+The **baseline** is what each phase is run with, installed into every
+engagement. Passive Recon, Active Recon, Cloud Resources and GitHub Resources
+share one **Reconnaissance** entry in the sidebar; the phases with no baseline
+tool are places to put what you add.
 
 | phase | tools | what it adds to the map |
 |---|---|---|
@@ -114,49 +139,79 @@ you tested at.
 
 ## Adding a tool
 
-Paste a GitHub link. First rung that works wins:
+Paste a GitHub link. Tools are installed natively and run as subprocesses; there
+is no container runtime on an engagement box. First rung that works wins:
 
-| # | when | how | speed |
+| # | when | how | notes |
 |---|---|---|---|
-| 0 | the README documents a published image | `docker pull` | seconds |
-| 1 | the repo ships a Dockerfile | `docker build` | minutes |
-| 2 | an install command is extractable from the README or `go.mod` | generated Dockerfile | minutes |
-| 3 | the same recipe on a base image contemporary with the dependencies | generated Dockerfile | minutes |
-| 4 | none of the above | fail with a readable reason | — |
+| 0 | in the distro's repos | `apt install` | signed packages, seconds |
+| 1 | a Python package | `pipx install` | own venv per tool |
+| 2 | a Go repo | `go install …@latest` | path from README / `go.mod` |
+| 3 | publishes release assets | download + `chmod +x` | |
+| 4 | anything else | clone + venv | explicit approval |
+| 5 | none of the above | fail, with what each rung tried | |
+
+Ordered by how much of a stranger's code has to run to install it — a distro
+package runs maintainer scripts from a signed archive, a clone runs whatever is
+in the repository.
+
+**Extract, never synthesise.** `go install github.com/owner/repo@latest` fails
+for most real Go tools: subfinder's actual path is
+`github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest` — note both the
+`/v2` and the `/cmd/`. Repo name is not install path, so the job is reading the
+repo's own documented command.
 
 **Fully deterministic — there is no model in it.** An LLM stage that wrote and
-repaired Dockerfiles was removed: every tool that installed did so through a
+repaired install recipes was removed: every tool that installed did so through a
 deterministic rung, while the model produced broken recipes and repair loops that
-thrashed. Fixing the *environment* — era-matched base images, C-extension headers
-— solved what it could not, in milliseconds rather than minutes.
-
-When every rung fails, `Hand off` composes the whole question — the errors, what
-was tried, the constraints of this build system — for you to paste into whatever
-model you already use. Paste the Dockerfile back and it is validated like any
+thrashed. When every rung fails, `Hand off` composes the whole question — the
+errors, what was tried, this system's constraints — for you to paste into
+whatever model you already use. Paste a recipe back and it is validated like any
 other. No API key, no network dependency, no inference here.
+
+Which rungs are allowed is a **per-deployment policy**: everything on a box you
+provision and destroy, `PENSTATION_RUNGS=apt` on hardware you do not own, where
+add-a-tool then resolves against the distro and never fetches from the internet.
+
+Version pins survive: the baseline declares `bbot==3.0.1` and
+`subfinder@v2.14.0`, which pipx and go install honour. Only apt-sourced tools
+take whatever the distro ships, so every run records the tool's `--version`.
 
 ## Security posture
 
-Install commands and pasted Dockerfiles derive from untrusted text, so both pass
-allowlist validators (`tools/validate.py`) before execution: permitted verbs
-only, no pipes, substitution, redirection or privilege escalation, must reference
-the repo being installed, official base images only. Nothing reaches a shell —
+Install commands derive from untrusted repository text, so they pass allowlist
+validators (`tools/validate.py`) before execution: permitted verbs only, no
+pipes, substitution, redirection or privilege escalation, must reference the repo
+being installed, bounded length, no control characters. Nothing reaches a shell —
 commands are built as argv.
 
-Runs are capped: `--rm`, 2 GB memory, 2 CPUs, 1024 pids, a wall-clock timeout and
-stdin closed, with no host mounts except a per-run scratch directory for
-`{{outdir}}`. Service banners and certificate fields are attacker-controlled, so
-they are bounded and stripped of control characters before reaching the map, and
-the port-table CSV neutralises cells that a spreadsheet would execute.
+Without a container those rules are the barrier rather than a second one, so two
+unprivileged accounts carry the rest:
 
-Docker isolates the host, but a build runs arbitrary `RUN` lines with network,
-and the Docker socket is root-equivalent: **local use, not shared infrastructure.**
+| user | runs | can read |
+|---|---|---|
+| your account | penstation itself | everything; owns `data/` at `700` |
+| `noprivuser-install` | install commands | not `data/`, not `~/.ssh` |
+| `noprivuser-run` | the tools themselves | only the run's scratch directory |
+
+Downloaded code therefore never holds your access at install time *or* at run
+time. Tools are spawned in their own process group so Stop takes the whole tree —
+killing the immediate child leaves nmap's and bbot's helpers running.
+
+Service banners and certificate fields are attacker-controlled, so they are
+bounded and stripped of control characters before reaching the map, and the
+port-table CSV neutralises cells a spreadsheet would execute.
+
+The UI is unauthenticated by design and reached over SSH. That only holds while
+it stays on loopback: **local use behind a tunnel, not shared infrastructure.**
 
 ## Files
 
 ```
-serve.py                     launcher
+serve.py                     front door for a clone
+pyproject.toml               packaging; zero dependencies, deliberately
 penstation/
+  cli.py             the command, and the bind guard
   server.py          HTTP + SSE, routes, terminal mirror
   map.py             the engagement graph: identity, parsers, scope, persistence
   nmapxml.py         nmap's XML, read per <host>; also the port-table CSV
@@ -172,13 +227,14 @@ penstation/
   tools/             the tool library
     store.py         ToolRecord + file-per-tool store
     jobs.py          serial job queue + status machine
-    pipeline.py      Inspect → Acquire → Verify
-    gather.py        repo signals, command extraction, Dockerfile templates
-    validate.py      install / command / Dockerfile validators
-    dockerops.py     docker pull/build/inspect/kill with streamed output
-    runner.py        docker run assembly (argv_mode, limits, {{outdir}})
-    handoff.py       compose a build failure for you to paste into a model
+    pipeline.py      Inspect → Acquire → Verify, and the rung policy
+    gather.py        repo signals, install-command extraction
+    validate.py      install / command validators
+    nativeops.py     apt / pipx / go / clone, run as the install user
+    runner.py        argv assembly, process-group kill, {{outdir}}
+    handoff.py       compose a failure for you to paste into a model
 scripts/
+  setup-box.sh       prepare an engagement box — idempotent
   check_nmap.py      what the nmap parser does — synthetic cases + real scans
   check_httpx.py     the same for httpx
 data/                        state (gitignored)
@@ -200,10 +256,14 @@ engagement. They pass on a fresh clone with no data.
 
 ## Known gaps
 
-Password spraying and exploitation have no tools. No findings kind — the map
-records what exists, not what is wrong with it. Screenshots are not taken. No
-version pinning beyond the recorded commit, no image GC, serial builds only, and
-tools needing API keys or wordlists are not configurable yet.
+Password spraying, exploitation, cloud and GitHub resources have no baseline
+tools. No findings kind — the map records what exists, not what is wrong with it.
+Screenshots are not taken. Tools needing API keys or wordlists are not
+configurable yet; `{{wordlist:…}}` and `{{key:…}}` are designed but unbuilt.
+
+**Runs do not survive a restart.** Tools are subprocesses of the server, so
+killing it kills them — where containers would have outlived it. Nothing
+reattaches on startup.
 
 Port node ids carry no protocol, so a UDP scan would merge `udp/53` into
 `tcp/53`; nothing in the baseline triggers it. The `contains` edge for a name

@@ -5,7 +5,7 @@ Install commands are derived from an UNTRUSTED README. A malicious repo can try 
 but the build step has network and runs arbitrary RUN lines — so every install
 command passes this allowlist before it is ever executed.
 
-Rules (docs/architecture.md):
+Rules:
   * allowed leading verb
   * no fetch-execute chaining (pipes, eval, command substitution)
   * no redirection or privilege escalation
