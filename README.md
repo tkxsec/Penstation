@@ -21,8 +21,8 @@ penstation runs **on the engagement box** — the VM provisioned for the job, wh
 has the address the client whitelisted and holds the evidence.
 
 ```bash
-sudo ./scripts/setup-box.sh      # once per box: install methods, unprivileged accounts
-python3 serve.py                 # or `penstation` after pip install -e .
+sudo ./setup.sh                  # once per box — installs everything below
+.venv/bin/penstation             # or: python3 serve.py
 ```
 
 Reach the UI over the SSH session you already have:
@@ -233,8 +233,8 @@ penstation/
     nativeops.py     apt / pipx / go / clone, run as the install user
     runner.py        argv assembly, process-group kill, {{outdir}}
     handoff.py       compose a failure for you to paste into a model
+setup.sh                     prepare an engagement box — one command, idempotent
 scripts/
-  setup-box.sh       prepare an engagement box — idempotent
   check_nmap.py      what the nmap parser does — synthetic cases + real scans
   check_httpx.py     the same for httpx
 data/                        state (gitignored)
