@@ -445,7 +445,7 @@ function setView(v){
 // freshly cleared engagement still claiming it had been run, and every node the
 // re-seeded scope put back reading as "new since it ran".
 function forgetRuns(){
-  runs.clear(); runout.clear(); promote.clear();
+  runs.clear(); runout.clear(); promote.clear(); reconParsed.clear();
   runHistory.clear(); reconSeen.clear(); nodeRunOf.clear();
   inbox.clear(); inEdit.clear();
   recon = null;                       // the phase panel belongs to that run
@@ -648,7 +648,7 @@ function connect(){
   es.addEventListener("removed", e => {
     const d = JSON.parse(e.data);
     tools.delete(d.id); logs.delete(d.id); runout.delete(d.id); runs.delete(d.id);
-    promote.delete(d.id); render();
+    promote.delete(d.id); reconParsed.delete(d.id); render();
   });
 }
 async function fetchLog(id){
@@ -2037,6 +2037,48 @@ function countInput(id){
 // What each tool's last run offered, keyed by tool id. See offerPromote.
 const promote = new Map();
 
+// What a run's declared result file contains, keyed by tool id: {run, names}.
+//
+// The discovered column needs this and cannot depend on the promote box having
+// been filled first. Which of them runs, and whether it runs before the column
+// is drawn, varies with how the page was reached — a live run, a reload, an
+// engagement switch — and a column that shows a scan's findings only on some of
+// those paths is a column you cannot trust. It asks for its own copy.
+const reconParsed = new Map();
+
+// The names a run found, from the parse of the file the tool declared. Answers
+// from cache, else from the promote box if it happens to hold this run, else by
+// asking the server — once per tool and run, repainting when it lands.
+function parsedNames(toolId, runId){
+  if(!runId || !proj) return [];
+  const hit = reconParsed.get(toolId);
+  if(hit && hit.run === runId) return hit.names;
+
+  const pst = promote.get(toolId);
+  if(pst && pst.run === runId && pst.rows && pst.rows.length){
+    const names = pst.rows.map(r => r.line || r.value).filter(Boolean);
+    reconParsed.set(toolId, {run:runId, names});
+    return names;
+  }
+
+  // Claim the slot before the fetch so a re-render while it is in flight does
+  // not start a second one.
+  reconParsed.set(toolId, {run:runId, names:[]});
+  const pid = proj.id;
+  fetch(`/projects/${pid}/map/classify`, {method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({run:runId})})
+    .then(r => r.json())
+    .then(d => {
+      if(!proj || proj.id !== pid) return;      // switched engagements
+      const names = (d.rows || []).map(r => r.line || r.value).filter(Boolean);
+      reconParsed.set(toolId, {run:runId, names});
+      if(names.length) render();
+    })
+    .catch(() => {});
+  return [];
+}
+
 // `all` takes every new row regardless of the checkboxes — including the
 // out-of-scope ones, which are deliberately left unchecked. That is the point of
 // having both buttons: "Add selected" respects the in-scope default, "Add all"
@@ -2719,11 +2761,8 @@ function reconStream(t, pfx = "r"){
   // This is the answer for any tool that writes its findings to a file and says
   // nothing about them on stdout: bbot reports "Saved 5 subdomains to
   // subdomains.txt" and never names one, so the stream carries no trace of the
-  // thing the scan was for. Same parse the promote box runs, same file the tool
-  // declared.
-  const pst = promote.get(t.id);
-  const parsed = (pst && pst.rows ? pst.rows : [])
-    .map(r => r.line || r.value).filter(Boolean);
+  // thing the scan was for.
+  const parsed = parsedNames(t.id, runId);
   // An empty tally is not an answer. `mapped` is recorded for every tool the
   // sequence handled, including ones whose rows were all filtered out, and an
   // empty array is truthy — so choosing on truthiness discarded every source
