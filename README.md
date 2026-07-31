@@ -65,13 +65,18 @@ node.
 
 ## Phases
 
-An external test runs through five phases. The **baseline** is what each is run
-with, installed into every engagement:
+An external test runs through these phases. The **baseline** is what each is run
+with, installed into every engagement; the ones with no baseline tool are places
+to put what you add. Passive Recon, Active Recon, Cloud Resources and GitHub
+Resources share one **Reconnaissance** entry in the sidebar:
 
 | phase | tools | what it adds to the map |
 |---|---|---|
-| Reconnaissance | bbot, subfinder, dig | names, and the addresses they resolve to |
-| Active Scanning | nmap | open ports, service detail |
+| Passive Recon | bbot, subfinder, dig | names, and the addresses they resolve to |
+| Active Recon | nmap | open ports, service detail |
+| Cloud Resources | — | |
+| GitHub Resources | — | |
+| Active Scanning | — | *(vulnerability scanners)* |
 | Web Analysis | httpx, curl, openssl | web applications, TLS facts |
 | Password Spraying | — | |
 | Exploitation | — | |

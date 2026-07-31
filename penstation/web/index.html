@@ -322,8 +322,10 @@
   .runbox .fields{ display:flex; gap:8px; align-items:center; }
   .runbox input{ flex:1; font-family:ui-monospace,Menlo,monospace; font-size:12px; }
   .exit0{ color:var(--green); } .exitN{ color:var(--red); }
-  /* command + live output on the left, --help reference on the right */
+  /* Settings on the left, results on the right — see runPane. */
   .split{ display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-top:12px; }
+  .runbox > .split{ margin-top:0; }
+  .runside{ min-width:0; }
   @media (max-width:900px){ .split{ grid-template-columns:1fr; } }
   .split pre{ max-height:300px; }
   .running{ color:var(--amber); font-size:12px; }
@@ -347,13 +349,8 @@
     <h2>Add Tool</h2>
     <div class="addrow">
       <input id="url" placeholder="https://github.com/owner/repo" onkeydown="if(event.key==='Enter')add()">
-      <select id="section">
-        <option value="reconnaissance">Reconnaissance</option>
-        <option value="active-scanning">Active Scanning</option>
-        <option value="web-analysis">Web Analysis</option>
-        <option value="password-spraying">Password Spraying</option>
-        <option value="exploitation">Exploitation</option>
-      </select>
+      <select id="section" onchange="renderAddSection()"></select>
+      <select id="subsection"></select>
       <button id="addbtn" onclick="add()">Add</button>
     </div>
     <div class="err" id="err"></div>
@@ -400,6 +397,7 @@ function applyProject(p){
   proj = p || null;
   SECTIONS = proj ? proj.section_list.map(s=>[s.key, s.label]) : [];
   SECTION_LABEL = new Map(SECTIONS);
+  renderAddSection();
 }
 
 async function loadProjects(keep){
@@ -693,9 +691,29 @@ async function restoreRuns(){
 }
 
 /* ---- actions ---- */
+// Where a tool goes is decided here, at install, and nowhere else. The phase
+// pages used to carry their own picker as well; two places to answer one
+// question meant the answer could differ depending on which you used.
+function renderAddSection(){
+  const sel = document.getElementById("section");
+  const sub = document.getElementById("subsection");
+  if(!sel || !sub) return;
+  const heads = SECTIONS.filter(([k])=>navHead(k) === k);
+  if(sel.options.length !== heads.length)
+    sel.innerHTML = heads.map(([k])=>
+      `<option value="${k}">${esc(navLabel(k))}</option>`).join("");
+  // A section that covers several only needs the second question asked.
+  const subs = phasesUnder(sel.value);
+  sub.hidden = subs.length < 2;
+  sub.innerHTML = subs.length < 2 ? "" : subs.map(k=>
+    `<option value="${k}">${esc(SECTION_LABEL.get(k) || k)}</option>`).join("");
+}
+
 async function add(){
   const url = document.getElementById("url").value.trim();
-  const section = document.getElementById("section").value;
+  const sub = document.getElementById("subsection");
+  const section = (!sub.hidden && sub.value)
+    ? sub.value : document.getElementById("section").value;
   const btn = document.getElementById("addbtn"), err = document.getElementById("err");
   err.textContent = ""; if(!url) return;
   btn.disabled = true;
@@ -706,7 +724,7 @@ async function add(){
                  if(d.need_token){ showSettings = true; loadSettings(); setView("settings"); } }
     else { tools.set(d.id,d); open.add(d.id); logs.set(d.id,"");
            document.getElementById("url").value="";
-           setView(d.section);   // follow the tool into its section to watch it build
+           setView(navHead(d.section));  // follow it into the entry that lists it
     }
   }catch(e){ err.textContent = "request failed"; }
   btn.disabled = false;
@@ -725,15 +743,6 @@ async function installBaseline(){
     `building ${d.queued.length}, reusing ${d.reused.length}`;
   await loadProjects(proj.id);
   loadMap();
-}
-
-async function assignTool(sect){
-  const sel = document.getElementById("pick-"+sect);
-  if(!sel.value) return;
-  await fetch(`/projects/${proj.id}/sections/${sect}/tools`,{method:"POST",
-    headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({tool_id: sel.value})});
-  await loadProjects(proj.id); loadMap();
 }
 
 // Unassign only. The image stays installed and available to every other
@@ -925,10 +934,30 @@ function paintRun(id){
 }
 
 /* ---- render ---- */
+// One sidebar entry can cover more than one phase.
+//
+// Passive and active recon are two halves of one job — you enumerate names, then
+// you scan what they resolve to, and you read the result as one picture. They
+// stay separate phases underneath, because they take different inputs and one
+// can be current while the other is stale; this only merges how they are
+// listed and read.
+const NAV_MERGE = new Map([
+  ["reconnaissance", {label: "Reconnaissance",
+                      phases: ["reconnaissance", "active-scanning",
+                               "cloud-resources", "github-resources"]}],
+]);
+// The entry a phase is listed under, and the phases an entry covers.
+function navHead(key){
+  for(const [head, g] of NAV_MERGE) if(g.phases.includes(key)) return head;
+  return key;
+}
+const phasesUnder = v => (NAV_MERGE.get(v) || {}).phases || [v];
+const navLabel = v => (NAV_MERGE.get(v) || {}).label || SECTION_LABEL.get(v) || v;
+
 function renderNav(){
   const all = [...tools.values()];
   const item = (key, label, extra) => {
-    const mine = toolsIn(key);
+    const mine = phasesUnder(key).flatMap(k=>toolsIn(k));
     // A section counts what you can actually run there. Building and failing
     // are install concerns, so their spinner and dot live on "Add Tool" —
     // that is the view you would go to in order to do anything about them.
@@ -963,7 +992,8 @@ function renderNav(){
     + `<a class="${view==='project'?'on':''}" onclick="setView('project')"><span>Project</span></a>`
     + `<a class="${view==='map'?'on':''}" onclick="setView('map')"><span>Map</span>
          ${mapCount ? `<span class="count">${mapCount}</span>` : ""}</a>`
-    + `<div class="navsub">` + SECTIONS.map(([k,l])=>item(k,l)).join("") + `</div>`
+    + `<div class="navsub">` + SECTIONS.filter(([k])=>navHead(k) === k)
+        .map(([k])=>item(k, navLabel(k))).join("") + `</div>`
     + `<div class="navgap"></div>`
     + `<a class="${view==='add'?'on':''}" onclick="setView('add')">
          <span>+ Add Tool</span>${installMark}</a>`
@@ -1008,7 +1038,7 @@ function renderView(){
   document.getElementById("v-newproject").hidden = view !== "newproject";
   document.getElementById("v-tools").hidden      = !isSection;
   if(isSection) document.getElementById("secttitle").textContent =
-    SECTION_LABEL.get(view);
+    navLabel(view);
   if(view === "settings") renderSettings();
   if(view === "project") renderProject();
   renderClear();
@@ -1061,9 +1091,17 @@ function renderView(){
     // files buried the four you came for.
     const filerow = runFiles(t, r);
 
+    // Two panels, the shape the map uses: what you set on the left, what came
+    // back on the right. The command, the target list and the reference for
+    // writing them are one job; the log, the files it wrote and what went on
+    // the map are another. They used to run down the page in one column with
+    // --help beside the output, which put the reference next to the results and
+    // the settings nowhere near each other.
     const runPane = `
       <div class="runbox">
-        <div class="lbl"><span>command</span>
+       <div class="split">
+        <div class="runside">
+        <div class="lbl" style="margin-top:0"><span>command</span>
           <span class="sub">
             ${overridden ? `<span class="pill">edited</span>
               <span style="cursor:pointer;color:var(--accent)"
@@ -1125,20 +1163,18 @@ function renderView(){
               oninput="countInput('${t.id}')"
               placeholder="one per line">${esc(val)}</textarea>
           </div>`;})()}
-        <div class="split">
-          <div>
-            <div class="lbl" style="margin-top:10px"><span>output</span>${footer}</div>
-            <pre class="term" id="run-${t.id}">${ansiToHtml(clip(runout.get(t.id)))}</pre>
-            ${filerow}
-            <div id="promote-${t.id}" class="promote"></div>
-          </div>
-          <div>
-            <div class="lbl" style="margin-top:10px"><span>--help</span>
-              <span class="sub" style="cursor:pointer;color:var(--accent)"
-                    onclick="refreshHelp('${t.id}')">refresh</span></div>
-            <pre class="term">${t.help_text ? ansiToHtml(t.help_text) : esc("(no help captured — try running `"+t.id+" --help` above)")}</pre>
-          </div>
+        <div class="lbl" style="margin-top:10px"><span>--help</span>
+          <span class="sub" style="cursor:pointer;color:var(--accent)"
+                onclick="refreshHelp('${t.id}')">refresh</span></div>
+        <pre class="term">${t.help_text ? ansiToHtml(t.help_text) : esc("(no help captured — try running `"+t.id+" --help` above)")}</pre>
         </div>
+        <div class="runside">
+          <div class="lbl" style="margin-top:0"><span>output</span>${footer}</div>
+          <pre class="term" id="run-${t.id}">${ansiToHtml(clip(runout.get(t.id)))}</pre>
+          ${filerow}
+          <div id="promote-${t.id}" class="promote"></div>
+        </div>
+       </div>
       </div>`;
     const infoPane = `
       <div class="body">
@@ -1225,36 +1261,38 @@ function renderView(){
   // whose section was retired) falls through to a final group rather than
   // vanishing from the list.
   if(view === "add"){
-    // Everything installed, newest first, with its setup log and controls.
+    // Two lists, because they answer to different people. What you installed is
+    // yours to retry, re-point and remove; the baseline arrives with every
+    // engagement and is the methodology, so a build failure in one of those is a
+    // different kind of problem. One list sorted by date interleaved them and
+    // buried the tool you just added among seven you never chose.
     const all = [...tools.values()].sort((a,b)=>b.created_at-a.created_at);
-    document.getElementById("alllist").innerHTML = all.length
-      ? all.map(t=>card(t,"manage")).join("")
-      : '<div class="empty">Nothing added yet.</div>';
+    const panel = (label, list, note, empty) => `
+      <div class="mappanel" style="display:block;margin-bottom:14px">
+        <div class="mapband"><span>${label}</span>
+          <span>${list.length ? `${list.length} tool${
+            list.length === 1 ? "" : "s"}` : "none"}</span></div>
+        ${note ? `<div class="sub" style="margin-bottom:6px">${note}</div>` : ""}
+        ${list.length ? list.map(t=>card(t,"manage")).join("")
+          : `<div class="sub">${empty}</div>`}
+      </div>`;
+    document.getElementById("alllist").innerHTML =
+      panel("installed tools", all.filter(t=>!t.baseline), "",
+            "Nothing yet — paste a repository above.")
+    + panel("baseline", all.filter(t=>t.baseline),
+            "Installed into every engagement. Run them from the Map.",
+            "The baseline has not been installed for this engagement.");
     return;
   }
   if(view === "map"){ renderMap(card); return; }
 
   // A phase shows only what you added — the baseline is under Map.
   const el = document.getElementById("list");
-  const list = toolsIn(view).filter(t=>!t.baseline);
-  // Everything installed that this section does not already have. Assigning is
-  // instant — the image is shared, so there is nothing to build.
-  const here = new Set(list.map(t=>t.id));
-  const spare = [...tools.values()].filter(
-    t=>!here.has(t.id) && t.status==="ready" && !t.baseline);
-  const picker = `<div class="card" style="padding:10px 12px;margin-bottom:10px">
-      <div class="addrow">
-        <select id="pick-${view}" style="flex:1">
-          <option value="">＋ add an installed tool…</option>
-          ${spare.map(t=>`<option value="${t.id}">${esc(t.id)}</option>`).join("")}
-        </select>
-        <button onclick="assignTool('${view}')" ${spare.length?"":"disabled"}>Add</button>
-      </div>
-      ${spare.length ? "" : `<div class="sub" style="margin-top:6px">
-        Everything installed is already here — install more under
-        <a style="color:var(--accent);cursor:pointer" onclick="setView('add')">Add Tool</a>.
-      </div>`}
-    </div>`;
+  const list = phasesUnder(view).flatMap(k=>toolsIn(k)).filter(t=>!t.baseline);
+  // No picker here. A tool's section is chosen once, when you install it under
+  // Add Tool, so there is one answer to "where does this live" instead of two
+  // that can disagree.
+  const subs = phasesUnder(view);
   // What the baseline did in this phase, as a record — no run box.
   //
   // Baseline tools were taken out of the phases when the Map grew its own phase
@@ -1271,12 +1309,28 @@ function renderView(){
   // so their output belongs there, not in a record of what the phase did. Same
   // filter the phase sweep uses, so the two cannot disagree about what is part
   // of the phase.
-  const mine = phaseTools(view).filter(sweeps);
-  const ran = mine.filter(t=>runs.has(t.id) || runout.has(t.id));
-  const folded = foldedRuns.has(view);
+  // Grouped by the phase that ran them, so a merged entry keeps the two apart:
+  // "11 names" and "9 open ports" answer different questions, and a single run
+  // of streams would not say which tool was doing which.
+  const groups = phasesUnder(view)
+    .map(k=>({key: k, label: SECTION_LABEL.get(k) || k,
+              mine: phaseTools(k).filter(sweeps)}))
+    .filter(g=>g.mine.length);
+  const mine = groups.flatMap(g=>g.mine);
+  const hasRun = t => runs.has(t.id) || runout.has(t.id);
+  const ran = mine.filter(hasRun);
+  // Folded unless you opened it: the baseline sits under your own sections as a
+  // record to go and read, and four open streams would push them off the page.
+  const folded = !runOpen(view, false);
+  // One phase under this entry does not need a header saying so.
+  const sub = g => groups.length < 2 ? "" :
+    `<div class="lbl" style="margin-top:10px"><span>${esc(g.label)}</span>
+       <span class="sub">${g.mine.filter(hasRun).length
+         ? `${g.mine.filter(hasRun).length} of ${g.mine.length} run`
+         : "not run yet"}</span></div>`;
   const baselineBlock = !mine.length ? "" : `
-    <div class="lbl" style="margin-top:2px"><span>${
-      ran.length ? runFold(view) : ""}baseline</span>
+    <div class="lbl" style="margin-top:18px"><span>${
+      ran.length ? runFold(view, false) : ""}baseline</span>
       <span class="sub">${ran.length
         ? `${ran.length} of ${mine.length} ${mine.length === 1 ? "tool has" : "tools have"} run`
         : `${mine.length} ${mine.length === 1 ? "tool" : "tools"}, none run yet`}
@@ -1284,16 +1338,40 @@ function renderView(){
             onclick="setView('map')">Map</a></span></div>
     <div class="card" style="padding:12px;margin-bottom:14px">
       ${!ran.length ? `<div class="sub">${esc(mine.map(t=>t.id).join(", "))} —
-             nothing has run in this phase yet</div>`
+             nothing has run here yet</div>`
         : folded ? `<div class="sub" style="cursor:pointer"
-             onclick="toggleRunFold('${esc(view)}')">${
-             esc(ran.map(t=>t.id).join(", "))} — output folded away</div>`
-        : ran.map(t=>reconStream(t, "p")).join("")}
+             onclick="toggleRunFold('${esc(view)}',false)">${
+             esc(ran.map(t=>t.id).join(", "))} — output folded away, click to read</div>`
+        : groups.map(g=>sub(g) + (g.mine.filter(hasRun).length
+            ? g.mine.filter(hasRun).map(t=>reconStream(t, "p")).join("")
+            : `<div class="sub" style="margin-top:4px">${
+                 esc(g.mine.map(t=>t.id).join(", "))} — not run yet</div>`)).join("")}
     </div>`;
 
-  el.innerHTML = baselineBlock + picker + (list.length
-    ? list.map(t=>card(t,"run",view)).join("")
-    : `<div class="empty">Nothing added to ${SECTION_LABEL.get(view)} yet.</div>`);
+  // Your own tools, one block per section under this entry. The picker is first
+  // because adding is what you came here to do; the baseline is last because it
+  // is a record of something that already happened.
+  const yours = subs.length < 2
+    ? (list.length ? list.map(t=>card(t,"run",view)).join("")
+        : `<div class="empty">Nothing added to ${navLabel(view)} yet.</div>`)
+    : subs.map(k=>{
+        const own = toolsIn(k).filter(t=>!t.baseline);
+        const ready = own.filter(t=>t.status === "ready").length;
+        // The map's panel shape: a heading and its tally on one rule, and the
+        // whole section enclosed so it reads as one thing rather than as cards
+        // that happen to follow a label.
+        return `<div class="mappanel" style="display:block;margin-bottom:14px">
+            <div class="mapband"><span>${esc(SECTION_LABEL.get(k) || k)}</span>
+              <span>${own.length
+                ? `${own.length} tool${own.length === 1 ? "" : "s"}${
+                    ready === own.length ? "" : ` · ${ready} ready`}`
+                : "empty"}</span></div>
+            ${own.length ? own.map(t=>card(t,"run",k)).join("")
+              : `<div class="sub">Nothing added yet — pick one above.</div>`}
+          </div>`;
+      }).join("");
+
+  el.innerHTML = yours + baselineBlock;
   // keep logs scrolled to the newest line
   tools.forEach((t,id)=>{ const p=document.getElementById("log-"+id); if(p) p.scrollTop=p.scrollHeight; });
 }
@@ -2448,15 +2526,21 @@ const openTools = new Set();
 // A set of *folded* keys, so the default is open: collapsing by default would
 // hide what you had just run, and this is for getting three finished tools out
 // of the way once you have read them.
-const foldedRuns = new Set();
-function toggleRunFold(key){
-  foldedRuns.has(key) ? foldedRuns.delete(key) : foldedRuns.add(key);
+// Explicit choices only — a key is absent until you click, so each place can
+// have its own default. A finished run's output is folded away, because it is a
+// record you go and read; a run happening now is open, because watching it is
+// the point. One set of keys could not say both.
+const runFoldState = new Map();
+const runOpen = (key, dflt) =>
+  runFoldState.has(key) ? runFoldState.get(key) : dflt;
+function toggleRunFold(key, dflt){
+  runFoldState.set(key, !runOpen(key, dflt));
   render();
 }
-const runFold = key => `<span class="fold" style="cursor:pointer"
-  onclick="toggleRunFold('${esc(key)}')"
-  title="${foldedRuns.has(key) ? "Show the output" : "Fold the output away"}"
-  >${foldedRuns.has(key) ? "▸" : "▾"}</span>`;
+const runFold = (key, dflt) => `<span class="fold" style="cursor:pointer"
+  onclick="toggleRunFold('${esc(key)}',${!!dflt})"
+  title="${runOpen(key, dflt) ? "Fold the output away" : "Show the output"}"
+  >${runOpen(key, dflt) ? "▾" : "▸"}</span>`;
 
 function toggleTools(key){
   openTools.has(key) ? openTools.delete(key) : openTools.add(key);
@@ -2698,12 +2782,16 @@ function reconPanel(key){
   if(!live){
     const past = phaseRunTools(key);
     if(!past.length) return "";
-    return box(`<div class="lbl"><span>${runFold(key)}last run</span>
+    // Open by default, unlike the phase page's copy of the same streams: this
+    // is the Map, where reading what a phase produced is the reason you are
+    // here. The phase page folds because the baseline sits below your own tools
+    // there, as a record to go back to.
+    return box(`<div class="lbl"><span>${runFold(key, true)}last run</span>
         <span class="sub">${past.length} tool${past.length===1?"":"s"}</span></div>
-      ${foldedRuns.has(key)
+      ${!runOpen(key, true)
         ? `<div class="sub" style="cursor:pointer"
-             onclick="toggleRunFold('${esc(key)}')">${
-             esc(past.map(t=>t.id).join(", "))} — output folded away</div>`
+             onclick="toggleRunFold('${esc(key)}',true)">${
+             esc(past.map(t=>t.id).join(", "))} — output folded away, click to read</div>`
         : `<div id="reconstreams">${past.map(t=>reconStream(t)).join("")}</div>`}`);
   }
 
@@ -2747,12 +2835,12 @@ function reconPanel(key){
         — they exist in a certificate or a public source but do not resolve
         publicly, so nothing can be scanned at them</div>` : ""}
     ${recon.msg && at === "discovery" ? `<div class="sub err">${esc(recon.msg)}</div>` : ""}
-    <div class="lbl" style="margin-top:8px"><span>${runFold(key)}output</span>
+    <div class="lbl" style="margin-top:8px"><span>${runFold(key, true)}output</span>
       <span class="sub">${list.length} tool${list.length===1?"":"s"}</span></div>
-    ${foldedRuns.has(key)
+    ${!runOpen(key, true)
       ? `<div class="sub" style="cursor:pointer"
-           onclick="toggleRunFold('${esc(key)}')">${
-           esc(list.map(t=>t.id).join(", "))} — output folded away</div>`
+           onclick="toggleRunFold('${esc(key)}',true)">${
+           esc(list.map(t=>t.id).join(", "))} — output folded away, click to read</div>`
       : `<div id="reconstreams">${streams}</div>`}
     <div class="fields" style="margin-top:8px">
       ${at === "done" ? `<button onclick="startRecon()">Run again</button>` : ""}

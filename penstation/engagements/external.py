@@ -14,8 +14,17 @@ LABEL = "External Penetration Test"
 # project records, so renaming one needs a migration; the labels are display
 # only and safe to reword.
 SECTIONS = [
-    ("reconnaissance",    "Reconnaissance"),
-    ("active-scanning",   "Active Scanning"),
+    ("reconnaissance",    "Passive Recon"),
+    ("active-scanning",   "Active Recon"),
+    # No baseline tool of their own — places to put what you add. They sit under
+    # Reconnaissance in the sidebar and stay out of the Map checklist, which
+    # lists the phases that actually run something.
+    ("cloud-resources",   "Cloud Resources"),
+    ("github-resources",  "GitHub Resources"),
+    # Vulnerability scanning — Nessus and the like. Its own phase, not the port
+    # scan: nmap says what is listening, this says what is wrong with it, and
+    # the second is far louder and needs its own place in the methodology.
+    ("vuln-scanning",     "Active Scanning"),
     ("web-analysis",      "Web Analysis"),
     ("password-spraying", "Password Spraying"),
     ("exploitation",      "Exploitation"),

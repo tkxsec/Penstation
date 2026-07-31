@@ -105,9 +105,9 @@ adding a type is writing a module, not editing conditionals.
 
 | phase | tools | consumes | produces |
 |---|---|---|---|
-| Reconnaissance | bbot, subfinder | — *(starts from the scope)* | names |
+| Passive Recon | bbot, subfinder | — *(starts from the scope)* | names |
 | | dig | domain | addresses, resolution edges |
-| Active Scanning | nmap | host, domain | open ports, service detail |
+| Active Recon | nmap | host, domain | open ports, service detail |
 | Web Analysis | httpx | port, host, domain | web applications, TLS facts |
 | | curl, openssl | — *(one target at a time)* | evidence on one node |
 
