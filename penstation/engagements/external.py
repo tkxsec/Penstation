@@ -173,7 +173,21 @@ BACKBONE = [
         # minutes with no way to tell a slow scan from a hung one. -vv adds each
         # open port the moment it is found ("Discovered open port 443/tcp on …")
         # rather than only at the end, so the log is useful while it runs.
-        "run": "nmap -iL {{input}} -sV -T4 -vv -oA {{outdir}}/scan",
+        # Timing and probe intensity come from the engagement's *scan* pace,
+        # which is set separately from the web one. This is the more disruptive
+        # half of the baseline — httpx fetches a page, this talks to whatever is
+        # listening — and the two dials cost wildly different amounts, so one
+        # setting for both would either make this unusable or make that loud.
+        "run": "nmap -iL {{input}} -sV {{scan_probes}} {{scan_timing}} -vv "
+               "-oA {{outdir}}/scan",
+        # The XML, and nothing else. All three formats describe the same scan,
+        # but only this one separates state, reason, service and version into
+        # fields — and reading all three concatenated is what sent nmap's output
+        # to the generic sweep, which found the addresses it already knew,
+        # invented `nmap.org` from the report-a-bug footer, and offered not one
+        # port. output_files stays unset so all three are still listed as
+        # evidence; this only narrows what promotion reads.
+        "result_file": "scan.xml",
         "dockerfile": (
             "FROM alpine:3.20\n"
             "RUN apk add --no-cache nmap nmap-scripts\n"
@@ -189,12 +203,46 @@ BACKBONE = [
         # and the one the baseline was missing: nmap can hand back forty web
         # ports and curl takes one target at a time.
         "consumes": ["port", "host", "domain"],
+        # This tool distinguishes its targets by hostname, so a port is not one
+        # target but several: the address, and every name that resolves to it.
+        #
+        # Measured, not assumed. Probing a set of open ports by address returned
+        # nothing belonging to the target at all: the ones on a platform's edge
+        # addresses redirected to that platform's own marketing site, and the
+        # ones behind a reverse proxy returned 404 with the proxy's default
+        # certificate. That 404 is the proof rather than a dead end — the
+        # application is there, it is chosen by the Host header, and only a
+        # request naming it arrives at it.
+        #
+        # It also turns off the under-wildcard fold. That fold is right for a
+        # port scanner — thirteen names on one address are one machine, and
+        # scanning it thirteen times is waste — and wrong here, because at the
+        # HTTP layer those names are routinely thirteen different applications.
+        "vhosts": True,
         # -l a list, one probe each, concurrent. -sc/-title/-td/-tls-grab are
         # the four facts worth having for every target; -fr because a bare probe
         # of a redirecting host reports the redirect, not the app behind it.
         # -json so promotion reads structured records rather than a formatted
         # table, and -silent to keep the banner out of them.
-        "run": "httpx -l {{input}} -sc -title -td -tls-grab -fr -silent "
+        # -fhr, not -fr: follow a redirect only while it stays on the same host.
+        # You still learn that a target redirects away — the status and the
+        # Location are recorded — without sending a request to a third party the
+        # engagement never authorised. Probing by address did exactly that, and
+        # the destination's title and technologies are someone else's
+        # application, which is not ours to fingerprint.
+        #
+        # -t/-rl come from the engagement's *web* pace, set separately from the
+        # scan one. httpx's own defaults are 50 threads at 150 requests a
+        # second, which is a burst most services absorb and some do not — and
+        # probing by hostname aims many names at one host, so that concurrency
+        # lands on a single machine rather than spreading across an estate.
+        #
+        # It is cheap at every setting: one request per target, so a few hundred
+        # names is minutes rather than hours. The reason to slow it is being
+        # noticed — a lot of distinct Host headers from one source address is
+        # what enumeration detection looks for — not the load itself.
+        "run": "httpx -l {{input}} -sc -title -td -tls-grab -fhr -silent "
+               "-t {{web_threads}} -rl {{web_rate}} "
                "-json -o {{outdir}}/httpx.jsonl",
         "result_file": "httpx.jsonl",
         "output_files": ["httpx.jsonl"],

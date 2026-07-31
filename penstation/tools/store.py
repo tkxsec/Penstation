@@ -61,6 +61,10 @@ class ToolRecord:
                                  # node kinds this tool can be pointed at one
                                  # at a time, from the map. `consumes` is the
                                  # list form; this is the single-target form
+    vhosts: bool = False         # the protocol routes on the hostname, so a port
+                                 # is reachable as every name that resolves to
+                                 # its host — and names under a wildcard are
+                                 # separate targets rather than one
     run_template: str = ""       # extracted hint — shown as the input's placeholder
     last_command: str = ""       # what you last ran, for history only
     command_override: str = ""   # your edit, if you made one; clears back to

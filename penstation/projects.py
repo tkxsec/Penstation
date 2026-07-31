@@ -28,6 +28,75 @@ TYPES = engagements.TYPES
 sections_for = engagements.sections_for
 
 
+# How hard this engagement may be tested.
+#
+# A property of the engagement, not of a command. The right pace is a client
+# decision — a CDN-fronted marketing site and a self-hosted application on small
+# hardware want very different answers — and encoding it per command meant
+# baseline tools drifting apart with nothing recording what had actually been
+# agreed. Baseline commands write placeholders; these decide what they become.
+#
+# Stored on the project, so a run's recorded command states the pace it ran at.
+# "Did your test cause the outage?" is a question you answer from the run
+# history or not at all.
+#
+# `careful` is the default on both dials deliberately. Scanning is authorised;
+# degrading a service usually is not.
+# Two dials, not one. The same word cannot mean the right thing for both: on a
+# real engagement — several hundred names across a hundred addresses — the same
+# "careful" costs the port scanner hours and the web probe about three minutes.
+# One setting therefore either makes the scan unusable or makes the probe
+# needlessly loud, and there is no value that avoids both.
+PACE_KEYS = ("careful", "normal", "aggressive")
+DEFAULT_PACE = "careful"
+
+# Port scanning. Timing decides how long you wait; probe intensity decides how
+# likely you are to upset something. They are separate flags because they are
+# separate risks — what knocks a fragile service over is being sent an odd
+# protocol probe, not being sent packets quickly. So the gentler settings reach
+# for `--version-light` first and only slow the clock when asked.
+#
+# Measured against a scan of three hosts across the top 1000 ports, nearly all
+# filtered — the worst case, since every filtered port waits out a timeout:
+# `-T4` took 35 seconds. `-T3` is a small multiple of that. `-T2` puts 0.4s
+# between probes and serialises them, which is 400 seconds per host before any
+# timeout — hours on a real estate, so it is not offered here. Ask for it by
+# hand on the run you need it for.
+SCAN_PACES = {
+    "careful":    {"timing": "-T3", "probes": "--version-light",
+                   "label": "careful — nmap's own timing, fewest service probes"},
+    "normal":     {"timing": "-T4", "probes": "--version-light",
+                   "label": "normal — quicker timeouts, still the light probe set"},
+    "aggressive": {"timing": "-T4", "probes": "",
+                   "label": "aggressive — nmap's full service-probe set"},
+}
+
+# HTTP probing. One request per target, so the cost is concurrency against a
+# single origin rather than volume: many hostnames routinely resolve to a
+# handful of addresses, and the whole sweep lands on those.
+#
+# Cheap at every setting — around 1,500 probes takes ~3 minutes at `careful` —
+# so the reason to move this dial is being noticed, not being slow. Hundreds of
+# requests carrying hundreds of distinct Host headers from one source address is
+# what enumeration detection is looking for.
+WEB_PACES = {
+    "careful":    {"threads": 5,  "rate": 10,
+                   "label": "careful — 5 at a time, 10 requests a second"},
+    "normal":     {"threads": 10, "rate": 20,
+                   "label": "normal — 10 at a time, 20 requests a second"},
+    "aggressive": {"threads": 50, "rate": 150,
+                   "label": "aggressive — httpx's own defaults"},
+}
+
+
+def scan_pace(pace: str) -> dict:
+    return SCAN_PACES.get(pace or DEFAULT_PACE, SCAN_PACES[DEFAULT_PACE])
+
+
+def web_pace(pace: str) -> dict:
+    return WEB_PACES.get(pace or DEFAULT_PACE, WEB_PACES[DEFAULT_PACE])
+
+
 def slug(text: str) -> str:
     s = re.sub(r"[^a-z0-9]+", "-", (text or "").lower()).strip("-")
     return s or "project"
@@ -39,6 +108,11 @@ class Project:
     client: str = ""
     scope: str = ""
     kind: str = engagements.DEFAULT   # engagement type; drives the section list
+    pace_scan: str = DEFAULT_PACE     # nmap, and anything that probes ports
+    pace_web: str = DEFAULT_PACE      # httpx, and anything that speaks HTTP
+    pace: str = ""                    # retired: one dial that drove both. Kept
+                                      # so a record written before the split
+                                      # still loads and carries its choice over
     notes: str = ""
     # section key -> tool ids, in the order you added them. Membership lives
     # here rather than on the tool so one image can sit in different sections
@@ -128,6 +202,14 @@ class Project:
         d["targets"] = self.targets
         d["networks"] = self.networks
         d["scope_all"] = self.scope_all
+        # The numbers behind each pace, so the command box can show what will
+        # actually run rather than a placeholder.
+        d["pace_scan_values"] = scan_pace(self.pace_scan)
+        d["pace_web_values"] = web_pace(self.pace_web)
+        d["scan_pace_options"] = [{"key": k, "label": v["label"]}
+                                  for k, v in SCAN_PACES.items()]
+        d["web_pace_options"] = [{"key": k, "label": v["label"]}
+                                 for k, v in WEB_PACES.items()]
         # Rules that cannot match anything, reported with the project so the UI
         # can say so where the scope is shown rather than silently finding less.
         from penstation import scope as scope_mod
@@ -148,7 +230,14 @@ def load(pid: str) -> Project | None:
     except (OSError, ValueError):
         return None
     known = {f for f in Project.__dataclass_fields__}
-    return Project(**{k: v for k, v in raw.items() if k in known})
+    p = Project(**{k: v for k, v in raw.items() if k in known})
+    # An engagement set before the split kept one word for both tools. Carry it
+    # to each dial rather than silently resetting a decision that was made.
+    if p.pace and "pace_scan" not in raw:
+        carried = p.pace if p.pace in PACE_KEYS else DEFAULT_PACE
+        p.pace_scan = p.pace_web = carried
+    p.pace = ""
+    return p
 
 
 def load_all() -> list[Project]:

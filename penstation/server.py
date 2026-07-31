@@ -22,11 +22,13 @@ import asyncio
 import urllib.parse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
 # app shell
 from penstation import map as gmap
+from penstation import nmapxml
 from penstation import engagements, projects, runs, scope, settings
 from penstation.events import bus
 
@@ -74,7 +76,13 @@ async def _read(reader):
 
 
 def _resp(status: str, body: bytes, ctype="application/json") -> bytes:
+    # Never cached. The UI is a single file served straight off disk, so editing
+    # it should be visible on a reload — and a browser that heuristically caches
+    # the page instead serves yesterday's code against today's data, which reads
+    # as a bug in the application rather than a stale tab. Nothing here is worth
+    # caching anyway: it is one local process serving one person.
     return (f"HTTP/1.1 {status}\r\nContent-Type: {ctype}\r\n"
+            f"Cache-Control: no-store, must-revalidate\r\n"
             f"Content-Length: {len(body)}\r\nConnection: close\r\n\r\n").encode() + body
 
 
@@ -85,7 +93,7 @@ _CTYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
 
 # Which relation links a parent to a newly promoted child.
 _REL = {"domain": "contains", "host": "resolves_to",
-        "port": "has_port", "webapp": "serves", "finding": "affects"}
+        "port": "has_port", "webapp": "serves"}
 
 
 def _url_unquote(s: str) -> str:
@@ -103,6 +111,96 @@ def _basename(name: str) -> str:
     return name.replace("\\", "/").rsplit("/", 1)[-1]
 
 
+# Attribute names a parser may write, and how much of a value is kept. The
+# values are service banners — the target writes them, not us — and they end up
+# on the map, in the port table and in the UI, so they are bounded and stripped
+# of control characters at the one place they enter.
+_ATTR_NAME = re.compile(r"[a-z][a-z0-9._-]{0,39}")
+_ATTR_MAX, _ATTR_LEN = 24, 400
+
+
+def _attrs(raw) -> dict:
+    """The attributes on a classify row, made safe to store."""
+    if not isinstance(raw, dict):
+        return {}
+    out = {}
+    for name, value in list(raw.items())[:_ATTR_MAX]:
+        if not isinstance(name, str) or not _ATTR_NAME.fullmatch(name):
+            continue
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            value = str(value)
+        if not isinstance(value, str):
+            continue
+        clean = "".join(c for c in value if c.isprintable())[:_ATTR_LEN].strip()
+        if clean:
+            out[name] = clean
+    return out
+
+
+def _paced(proj, command: str) -> str:
+    """Fill in the engagement's pace.
+
+    The numbers a scanner runs at are a client decision — a CDN-fronted site and
+    a self-hosted application on small hardware want very different answers — so
+    they live on the project and the commands carry placeholders. Substituted
+    server-side at the moment of running, because a value you can edit around in
+    the command box is not a limit.
+
+    Port scanning and HTTP probing read *different* dials, and the placeholder
+    name says which. One setting for both cannot be right: across a few hundred
+    names the same word costs the port scanner hours and the web probe minutes,
+    so any single value either makes the scan unusable or makes the probe louder
+    than it needs to be.
+    """
+    s = projects.scan_pace(getattr(proj, "pace_scan", ""))
+    w = projects.web_pace(getattr(proj, "pace_web", ""))
+    filled = (command.replace("{{scan_timing}}", s["timing"])
+                     .replace("{{scan_probes}}", s["probes"])
+                     .replace("{{web_threads}}", str(w["threads"]))
+                     .replace("{{web_rate}}", str(w["rate"])))
+    # A placeholder can expand to nothing — the hardest scan pace leaves nmap's
+    # own probe intensity alone — so the gap it leaves is closed rather than
+    # shipped to the container as a double space.
+    return " ".join(filled.split())
+
+
+async def _record_coverage(project: str, check: str, run_id: str,
+                           input_text: str) -> int:
+    """Mark every target a run was handed as covered by its check kind.
+
+    Recorded when the run finishes, from the list it was given — not when you
+    promote its output. A host that answered nothing was still scanned, and so
+    was a row you left unticked; deciding coverage at promote time made "never
+    scanned" and "you didn't tick it" the same state on the map, and only one of
+    those is worth doing anything about.
+
+    Values are matched through classify(), so the same line that became a target
+    resolves back to the node it came from — including `host:port`, which is a
+    port node rather than a host with a colon in it.
+    """
+    marked = 0
+
+    def mark(m):
+        nonlocal marked
+        for line in input_text.splitlines():
+            hit = gmap.classify(line.strip())
+            if not hit:
+                continue
+            kind, extra = hit
+            try:
+                nid = gmap.node_id(kind, extra.get("value", ""),
+                                   **({"port": extra["port"]} if "port" in extra
+                                      else {}))
+            except (ValueError, KeyError, TypeError):
+                continue
+            if nid in m.nodes:
+                m.mark_checked(nid, check, run_id)
+                marked += 1
+        return marked
+
+    return await gmap.mutate(project, mark)
+
+
 def _out_of_scope_targets(proj, command: str, input_text: str) -> list[str]:
     """Targets in this run that the map says are not ours to touch.
 
@@ -117,11 +215,43 @@ def _out_of_scope_targets(proj, command: str, input_text: str) -> list[str]:
     """
     m = gmap.load(proj.id)
     verdicts = gmap.derive_scope(m, lambda v: scope.matching_rule(proj.scope, v))
-    known = {}
-    for nid, n in m.nodes.items():
-        ok = verdicts.get(nid, {}).get("in_scope", True)
-        known.setdefault(gmap.canon_domain(n.value), ok)
-        known.setdefault(gmap.canon_host(n.value), ok)
+
+    def verdict_for(value: str, depth: int = 0):
+        """The map's verdict on a target, or None when the map doesn't know it.
+
+        Resolved through classify() to a node id rather than matched on the node's
+        value. A port node is keyed on the host it belongs to, so its value is
+        that host's address alone — matching by value meant `198.51.100.10:80`
+        found nothing, fell through to the scope rules, and was refused, while
+        the map showed the very same port in scope. Every tool that consumes
+        ports would have been blocked from running at all.
+
+        A port or a web app the map has never seen falls back to whatever it
+        hangs off: they are ways of addressing a host, not separate
+        authorisations.
+        """
+        hit = gmap.classify(value)
+        if not hit or depth > 2:
+            return None
+        kind, extra = hit
+        val = extra.get("value", "")
+        try:
+            nid = gmap.node_id(kind, val,
+                               **({"port": extra["port"]} if "port" in extra else {}))
+        except (ValueError, KeyError, TypeError):
+            return None
+        if nid in verdicts:
+            return verdicts[nid]["in_scope"]
+        if kind == "port":
+            return verdict_for(val, depth + 1)
+        if kind == "webapp":
+            try:
+                host = urllib.parse.urlsplit(
+                    val if "://" in val else "http://" + val).hostname
+            except ValueError:
+                return None
+            return verdict_for(host, depth + 1) if host else None
+        return None
 
     words = list((input_text or "").splitlines())
     words += [w for w in (command or "").replace("=", " ").split()
@@ -136,14 +266,14 @@ def _out_of_scope_targets(proj, command: str, input_text: str) -> list[str]:
         kind = (gmap.classify(v) or ("", {}))[0]
         if kind not in ("domain", "host", "port", "webapp"):
             continue
-        for key in (gmap.canon_domain(v), gmap.canon_host(v)):
-            if key in known:
-                if not known[key] and v not in bad:
-                    bad.append(v)
-                break
-        else:
-            if not scope.matches(proj.scope, v) and v not in bad:
-                bad.append(v)
+        # The map's call if it has one — so an address in scope only by
+        # inheritance still passes — else the scope rules alone, because typing
+        # something into the box is not a way to reach what was never authorised.
+        ok = verdict_for(v)
+        if ok is None:
+            ok = bool(scope.matches(proj.scope, v))
+        if not ok and v not in bad:
+            bad.append(v)
     return bad
 
 
@@ -271,6 +401,7 @@ def ensure_baseline(kind: str = "") -> dict:
                 rec.result_file = entry.get("result_file", "")
                 rec.output_files = list(entry.get("output_files") or [])
                 rec.targets = list(entry.get("targets") or [])
+                rec.vhosts = bool(entry.get("vhosts"))
                 rec.save()
                 queue.submit(rec)
                 queued.append(tid)
@@ -281,6 +412,7 @@ def ensure_baseline(kind: str = "") -> dict:
                 rec.result_file = entry.get("result_file", "")
                 rec.output_files = list(entry.get("output_files") or [])
                 rec.targets = list(entry.get("targets") or [])
+                rec.vhosts = bool(entry.get("vhosts"))
                 rec.check = entry.get("check", "")
                 rec.run_template = entry.get("run", "")
                 rec.save()
@@ -380,6 +512,15 @@ async def _do_run(rec, command: str, project: str, section: str,
         run.finished_at = time.time()
         run.save()
 
+    # What this run covered, recorded from what it was given. Never allowed to
+    # take the run down with it — the evidence is already on disk by here, and
+    # a bookkeeping failure must not turn a completed scan into a failed one.
+    if run.exit_code == 0 and input_text and rec.check:
+        try:
+            await _record_coverage(project, rec.check, run.id, input_text)
+        except Exception as exc:                       # noqa: BLE001
+            on_line(f"[coverage] could not record what this run covered: {exc}\n")
+
 
 def make_handler():
     async def handle(reader, writer):
@@ -476,6 +617,11 @@ def make_handler():
                             + " — move them in scope, or run it anyway",
                             "out_of_scope": refused}))
                     else:
+                        # Pace is filled in here, at the last point before the
+                        # command runs, so it cannot be edited around: the browser
+                        # substitutes the same values for display, but what the
+                        # engagement agreed to is applied whatever arrives.
+                        command = _paced(proj, command)
                         rec.last_command = command      # history only
                         rec.save()
                         asyncio.create_task(_do_run(rec, command, proj.id,
@@ -673,9 +819,23 @@ def make_handler():
                                     text += "\n" + fp.read_text(errors="replace")
                                 except OSError:
                                     pass
-                found = gmap.classify_all(text)
                 m = gmap.load(parts[1])
                 proj = projects.load(parts[1])
+                # Read the map before the parse, not after. A re-scan is only
+                # legible against what is already known — nmap's parser needs it
+                # to tell "this port is newly open" from "this port the map
+                # holds came back filtered this time".
+                found = gmap.classify_all(text, known=frozenset(m.nodes))
+                # One scope verdict, from the same function the map view uses.
+                # Deriving a weaker one here is what made every port a scan
+                # found arrive "outside scope": no domain rule matches an IP, so
+                # a host that is in scope on the map by inheritance was not a
+                # seed here, and the has_port pass below had nothing to carry
+                # from. Forty ports on hosts you are authorised to scan, all
+                # unticked.
+                derived = gmap.derive_scope(
+                    m, (lambda v: scope.matching_rule(proj.scope, v)) if proj
+                       else (lambda v: "*"))
                 # Wildcards known before this output plus any it declares itself,
                 # so a single bbot run folds its own findings without needing a
                 # second pass. The tool that detects the wildcard is rarely the
@@ -714,10 +874,15 @@ def make_handler():
                              if t in gmap.KEEP_TAGS]
                     third = gmap.is_third_party(
                         (node.tags if node else []) + marks)
-                    in_scope = gmap.in_scope(
+                    # A node the map already holds is judged by the map, which
+                    # has already applied your overrides and one hop of
+                    # inheritance. Only something the map has never seen falls
+                    # back to the rules alone.
+                    verdict = derived.get(nid)
+                    in_scope = (verdict["in_scope"] if verdict else gmap.in_scope(
                         node.tags if node else [],
                         bool(scope.matches(proj.scope, r["value"])
-                             if proj else True))
+                             if proj else True)))
                     rows.append({**r, "id": nid, "known": nid in m.nodes,
                                  "under_wildcard": under, "in_scope": in_scope,
                                  "third_party": third,
@@ -755,7 +920,11 @@ def make_handler():
                                   "edges": found.get("edges") or [],
                                   "total": len(rows), "folded": folded,
                                   "missing_result": missing,
-                                  "new": sum(1 for r in rows if not r["known"])}))
+                                  # An enrich-only row can never become a node,
+                                  # so counting it as "new" would promise a
+                                  # row the box does not offer.
+                                  "new": sum(1 for r in rows if not r["known"]
+                                             and not r.get("enrich_only"))}))
 
             elif (method == "POST" and len(parts) == 3 and parts[0] == "projects"
                   and parts[2] == "map"):
@@ -779,22 +948,46 @@ def make_handler():
                     # made: the same resolution appears on several events, and
                     # reporting "36 links" when 34 landed is just wrong.
                     nonlocal stale
-                    added, before = 0, len(m.edges)
+                    added, updated, before = 0, 0, len(m.edges)
                     for r in rows:
                         kind, value = r.get("kind"), r.get("value") or r.get("line")
                         if kind not in gmap.KINDS or not value:
                             continue
                         extra = {"port": int(r["port"])} if r.get("port") else {}
-                        if kind == "finding" and r.get("on"):
-                            extra["on"] = r["on"]
-                        node = m.add_node(kind, value, run=run_id, tool=tool, **extra)
+                        try:
+                            nid = gmap.node_id(kind, value, **extra)
+                        except (ValueError, KeyError, TypeError):
+                            continue
+                        existed = nid in m.nodes
+                        # Evidence about a node, not a discovery of one: a host
+                        # that did not respond, a port the map holds that came
+                        # back filtered. It is recorded where the node already
+                        # exists and never creates one — otherwise a /24 sweep
+                        # would put every dead address in the range on the map.
+                        if r.get("enrich_only") and not existed:
+                            continue
+                        node = m.add_node(kind, value, run=run_id, tool=tool,
+                                          attrs=_attrs(r.get("attrs")), **extra)
+                        if existed:
+                            updated += 1
+                        # Promoting is a decision; being re-observed is not. An
+                        # enrich row must not tag a node you never picked as one
+                        # you accepted into scope.
+                        if r.get("enrich_only"):
+                            continue
                         # Promoting is the scope decision. A row you reviewed and
                         # put on the map is in scope from then on, whatever the
                         # scope text says — that is what "Add all" means when it
                         # takes rows the rules flagged. The tag is what makes it
                         # stick: without it the same value came back flagged
                         # out of scope on every later classify.
-                        if gmap.ACCEPTED not in node.tags:
+                        #
+                        # Only when the node is new, though. Being *re-observed*
+                        # is not a decision, and rows about nodes the map already
+                        # holds are applied without being offered — so tagging
+                        # them here would let a re-scan quietly accept a host you
+                        # had deliberately left out of scope.
+                        if not existed and gmap.ACCEPTED not in node.tags:
                             node.tags.append(gmap.ACCEPTED)
                         # Whose infrastructure the scan said this is. Carried
                         # onto the node so the map can show it and scope can
@@ -817,10 +1010,21 @@ def make_handler():
                             if pid in m.nodes and pid != node.id:
                                 m.link(pid, "contains", node.id,
                                        run=run_id, tool=tool)
-                        if parent and parent in m.nodes:
+                        # The positional guess: whatever you ran the tool from is
+                        # the parent of what came back. An explicit relation from
+                        # the parser beats it — the tool knows how the two are
+                        # related and this only knows the node kind.
+                        # Never to itself: a scan aimed at one host reports that
+                        # host back, and `host resolves_to host` is a loop in the
+                        # graph and a nonsense in the tree drawn from it.
+                        if parent and parent in m.nodes and parent != node.id \
+                                and not any(
+                                    e.get("frm") == parent and e.get("to") == node.id
+                                    for e in want_edges):
                             m.link(parent, _REL.get(kind, "contains"), node.id,
                                    run=run_id, tool=tool)
-                        added += 1
+                        if not existed:
+                            added += 1
                     for e in want_edges:
                         frm, rel, to = e.get("frm"), e.get("rel"), e.get("to")
                         if rel in gmap.RELATIONS and frm in m.nodes and to in m.nodes:
@@ -846,15 +1050,16 @@ def make_handler():
                         # which counts nodes by their phase's checks — can see
                         # its own work. Keyed by tool, nothing matched.
                         m.mark_checked(parent, check_kind, run_id)
-                    return added, len(m.edges) - before
+                    return added, updated, len(m.edges) - before
 
-                added, linked = await gmap.mutate(parts[1], commit)
+                added, updated, linked = await gmap.mutate(parts[1], commit)
                 out(_paint(f"[map] {parts[1]}: +{added} node(s), "
                            f"+{linked} edge(s) from {tool}"
+                           + (f", {updated} updated" if updated else "")
                            + (f", {stale} stale resolution(s) dropped"
                               if stale else ""), "green"))
-                writer.write(_ok({"added": added, "linked": linked,
-                                  "stale": stale}))
+                writer.write(_ok({"added": added, "updated": updated,
+                                  "linked": linked, "stale": stale}))
 
             elif (method == "POST" and len(parts) == 4 and parts[0] == "projects"
                   and parts[2] == "map" and parts[3] == "scope"):
@@ -930,6 +1135,34 @@ def make_handler():
                             n.tags = list(p.get("tags") or [])
                         return True
                     writer.write(_ok({"ok": await gmap.mutate(parts[1], edit)}))
+
+            elif (method == "GET" and len(parts) == 5 and parts[0] == "projects"
+                  and parts[2] == "runs" and parts[4] == "ports.csv"):
+                # Every port a scan reported, in every state — the detail that is
+                # deliberately not on the map. Generated from the run's retained
+                # scan.xml on request: nothing new on disk to drift from the XML,
+                # and it works for scans taken before this route existed.
+                #
+                # Must sit above the generic five-part runs route below, which
+                # would otherwise read "ports.csv" as a run id.
+                r = runs.load(parts[1], _url_unquote(parts[3]))
+                fp = None
+                for f in (r.files if r else []) or []:
+                    if _basename(f.get("name", "")).lower() == "scan.xml":
+                        fp = r.file_path(f["name"])
+                        break
+                if fp is None:
+                    # An honest 404: the coverage mark names one run per check
+                    # kind, and that run may have been a different port scanner,
+                    # or an nmap killed before it wrote any XML.
+                    writer.write(_resp("404 Not Found",
+                                       b"this run kept no nmap XML, so there is "
+                                       b"no port table to build from it",
+                                       "text/plain"))
+                else:
+                    body = nmapxml.csv_text(
+                        fp.read_text(errors="replace")).encode()
+                    writer.write(_resp("200 OK", body, "text/csv"))
 
             elif (method == "GET" and len(parts) >= 6 and parts[0] == "projects"
                   and parts[2] == "runs" and parts[4] == "files"):
@@ -1019,6 +1252,12 @@ def make_handler():
                     for f in ("client", "scope", "kind", "notes"):
                         if f in p:
                             setattr(proj, f, (p.get(f) or "").strip())
+                    # Only a pace we know. An unrecognised one would fall back to
+                    # careful at run time, which is safe but would leave the UI
+                    # claiming a setting the engagement does not have.
+                    for f in ("pace_scan", "pace_web"):
+                        if (p.get(f) or "").strip() in projects.PACE_KEYS:
+                            setattr(proj, f, p[f].strip())
                     proj.save()
                     if "scope" in p and proj.scope:
                         # Editing scope adds the new roots; it never removes

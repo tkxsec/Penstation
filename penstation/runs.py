@@ -111,6 +111,12 @@ def start(project: str, tool: str, section: str, command: str) -> Run:
 
 
 def load(project: str, run_id: str) -> Run | None:
+    # The id arrives from a URL and is about to be joined onto a path. Run ids
+    # are generated as `<tool>-<millis>`, so anything with a separator in it is
+    # not one — and file_path() only guards files *inside* a run, not which run
+    # directory gets opened.
+    if not run_id or "/" in run_id or "\\" in run_id or ".." in run_id:
+        return None
     try:
         raw = json.loads((_dir(project) / f"{run_id}.json").read_text())
     except (OSError, ValueError):
