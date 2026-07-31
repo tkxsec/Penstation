@@ -33,10 +33,9 @@ say "1/6  install methods"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 # git and curl for the clone and release rungs, golang for go install, pipx for
-# Python tools, seclists because wordlists are a package rather than a problem,
-# tmux so a dropped SSH session does not take a running scan with it.
+# Python tools, seclists because wordlists are a package rather than a problem.
 apt-get install -y --no-install-recommends \
-    git curl ca-certificates golang pipx seclists tmux python3-venv
+    git curl ca-certificates golang pipx seclists python3-venv
 
 say "2/6  unprivileged accounts"
 # Downloaded code never holds your access: one account installs, another runs.
@@ -95,7 +94,7 @@ chmod -R 700 "$DATA_DIR"
 echo "  $DATA_DIR → $OWNER, 700 (the install and run accounts cannot read it)"
 
 say "6/6  what this box can offer"
-for t in apt-get pipx go git curl python3 tmux; do
+for t in apt-get pipx go git curl python3; do
     printf '  %-10s %s\n' "$t" "$(command -v "$t" || echo '— missing')"
 done
 printf '  %-10s %s\n' "seclists" \
@@ -104,11 +103,10 @@ printf '  %-10s %s\n' "seclists" \
 say "done"
 cat <<EOF
   Start it:
-    tmux new -s pen
     cd $REPO
-    PENSTATION_INSTALL_USER=noprivuser-install \\
-    PENSTATION_RUN_USER=noprivuser-run \\
-      .venv/bin/penstation
+    .venv/bin/penstation
+
+  It finds noprivuser-install and noprivuser-run by name — nothing to export.
 
   Reach the UI, from your laptop:
     ssh -L 8787:127.0.0.1:8787 <this box>

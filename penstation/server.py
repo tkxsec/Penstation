@@ -46,10 +46,11 @@ from penstation.tools.validate import (validate_command, validate_dockerfile,
 
 WEB = Path(__file__).parent / "web"
 
-# The unprivileged accounts installs and runs step down to, so downloaded code
-# never holds penstation's own access. Empty means "this user" — fine on a box
-# where you are the only account, and set by scripts/setup-box.sh otherwise.
-RUN_AS_INSTALL = os.environ.get("PENSTATION_INSTALL_USER", "")
+# The unprivileged account installs step down to, so downloaded code never holds
+# penstation's own access. Found on the box rather than configured — setup.sh
+# creates it, and an environment variable you have to remember is one you can
+# forget, which would silently give a stranger's setup.py your access.
+RUN_AS_INSTALL = N.account("install")
 
 # Which rungs the ladder may use here. Everything on a box you provision and
 # destroy; `PENSTATION_RUNGS=apt` on hardware you do not own, so add-a-tool

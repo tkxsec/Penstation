@@ -73,7 +73,9 @@ access to that box, so exposing a port buys nothing that is not already there.
 prints a warning that scrolls past and the session connects anyway, leaving you
 to work out why the page will not load.
 
-Run the server under `tmux` so a dropped connection does not take a scan with it.
+A run is a subprocess of the server, so a dropped connection ends both — there is
+no container left holding the work, and nothing reattaches on restart. Start it
+detached for a scan you cannot afford to lose.
 
 ---
 

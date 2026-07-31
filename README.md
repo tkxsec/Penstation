@@ -43,8 +43,12 @@ Host engagement
 repository URL and installs it, another executes a command — so binding anywhere
 but loopback puts a root-capable web interface on a public address. The CLI
 refuses to do it without an explicit override, and the SSH key is what gates
-access instead. Run it under `tmux` so a dropped connection does not take a scan
-with it.
+access instead.
+
+A run is a subprocess of the server, so closing the SSH session ends both — there
+is no container left holding the work, and nothing reattaches on restart. For a
+scan you cannot afford to lose, start it detached:
+`nohup .venv/bin/penstation &`.
 
 **A GitHub token is required to add tools.** Unauthenticated GitHub allows ~60
 API requests an hour and trips abuse detection, which can get the whole IP
@@ -63,8 +67,8 @@ repositories.
 |---|---|
 | `PENSTATION_GITHUB_TOKEN` / `GITHUB_TOKEN` / `GH_TOKEN` | raises the API limit to 5,000/hr |
 | `PENSTATION_DATA` | where state lives (default: `data/` beside the code) |
-| `PENSTATION_INSTALL_USER` | unprivileged account installs run as |
-| `PENSTATION_RUN_USER` | unprivileged account tools run as |
+| `PENSTATION_INSTALL_USER` | override the account installs run as *(found automatically)* |
+| `PENSTATION_RUN_USER` | override the account tools run as *(found automatically)* |
 | `PENSTATION_RUNGS` | restrict the install ladder, e.g. `apt` |
 | `PENSTATION_EXTRA_INSTALL_VERBS` | extend the install-command allowlist |
 
@@ -187,6 +191,9 @@ commands are built as argv.
 
 Without a container those rules are the barrier rather than a second one, so two
 unprivileged accounts carry the rest:
+
+`setup.sh` creates both, and penstation finds them by name — nothing to
+configure, and nothing to forget:
 
 | user | runs | can read |
 |---|---|---|

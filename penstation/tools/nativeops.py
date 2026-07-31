@@ -35,6 +35,35 @@ class InstallError(Exception):
     """An install command failed, or the tooling it needs is missing."""
 
 
+# -- who runs what -----------------------------------------------------
+# The unprivileged accounts setup.sh creates. Discovered rather than configured:
+# they either exist on this box or they do not, so asking the passwd database is
+# a better answer than an environment variable someone has to remember to set —
+# and forgetting it silently drops the separation these accounts exist to buy.
+INSTALL_ACCOUNT = "noprivuser-install"
+RUN_ACCOUNT = "noprivuser-run"
+
+
+def _exists(name: str) -> bool:
+    try:
+        import pwd                       # Unix only; absent on a dev box
+        pwd.getpwnam(name)
+        return True
+    except (ImportError, KeyError):
+        return False
+
+
+def account(kind: str) -> str:
+    """The account to install or run as: the env override, the standard account
+    if setup.sh made it, else empty — meaning "this user"."""
+    env = "PENSTATION_INSTALL_USER" if kind == "install" else "PENSTATION_RUN_USER"
+    override = os.environ.get(env)
+    if override is not None:            # set-but-empty deliberately means "me"
+        return override.strip()
+    standard = INSTALL_ACCOUNT if kind == "install" else RUN_ACCOUNT
+    return standard if _exists(standard) else ""
+
+
 # -- running things ----------------------------------------------------
 def as_user(user: str, argv: Sequence[str]) -> list[str]:
     """Wrap argv so it runs as `user`, or unchanged when no user is set.

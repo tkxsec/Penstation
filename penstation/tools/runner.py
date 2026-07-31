@@ -1,15 +1,16 @@
-"""Run a command inside an installed tool's container.
+"""Run an installed tool as a subprocess.
 
-You type the real command; this assembles the `docker run` around it. Output is
-streamed line-by-line through `on_line` so it appears while the tool works.
+You type the real command; this resolves it to the binary that was installed and
+runs it. Output is streamed line-by-line through `on_line` so it appears while
+the tool works.
 
 Two details that matter:
-  * Containers are **named**, so Stop can `docker kill` the container. Killing the
-    `docker run` client alone would leave the work running.
-  * If the image has an ENTRYPOINT (most do), the binary is already baked in, so
-    typing `bbot -t x` would pass "bbot" as an argument. The first token is
-    stripped **only when it matches that entrypoint**, so `bbot -t x` and `-t x`
-    both work.
+  * The tool leads its **own process group**, so Stop can take the whole tree.
+    nmap and bbot spawn helpers, and killing only the immediate child leaves a
+    "stopped" scan still sending packets.
+  * It runs as an **unprivileged account**, not as penstation. A package that
+    behaves during install and misbehaves when invoked would otherwise hold the
+    access penstation has to the map, the evidence and the network.
 
 Nothing goes through a shell: the command is split with shlex and passed as argv.
 """
@@ -37,7 +38,11 @@ INPUT_NAME = "input.txt"
 # running under another is the point: a package that behaves during install and
 # misbehaves when invoked would otherwise hold penstation's own access to the
 # map, the evidence and the network position.
-RUN_USER = os.environ.get("PENSTATION_RUN_USER", "")
+#
+# Resolved per call rather than at import, so a run picks up an account created
+# after the server started.
+def _run_user() -> str:
+    return N.account("run")
 
 # tool id -> container name, for Stop
 _active: dict[str, int] = {}
@@ -106,7 +111,7 @@ def build_argv(rec: ToolRecord, command: str, name: str,
 
     if rec.binary_path:
         parts[0] = rec.binary_path
-    return N.as_user(RUN_USER, parts)
+    return N.as_user(_run_user(), parts)
 
 
 async def run_command(rec: ToolRecord, command: str, on_line: OnLine,
