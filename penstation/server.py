@@ -33,7 +33,7 @@ from penstation import engagements, projects, runs, scope, settings
 from penstation.events import bus
 
 # the add-a-tool feature
-from penstation.tools import dockerops as D
+from penstation.tools import nativeops as N
 from penstation.tools import gather as gather_mod
 from penstation.tools import handoff
 from penstation.tools import runner, store
@@ -46,8 +46,18 @@ from penstation.tools.validate import (validate_command, validate_dockerfile,
 
 WEB = Path(__file__).parent / "web"
 
-# The Pipeline is fully deterministic — no model, no configuration.
-queue = JobQueue(Pipeline())
+# The unprivileged accounts installs and runs step down to, so downloaded code
+# never holds penstation's own access. Empty means "this user" — fine on a box
+# where you are the only account, and set by scripts/setup-box.sh otherwise.
+RUN_AS_INSTALL = os.environ.get("PENSTATION_INSTALL_USER", "")
+
+# Which rungs the ladder may use here. Everything on a box you provision and
+# destroy; `PENSTATION_RUNGS=apt` on hardware you do not own, so add-a-tool
+# resolves against the distro and never fetches from the internet.
+_RUNGS = [r.strip() for r in os.environ.get("PENSTATION_RUNGS", "").split(",") if r.strip()]
+
+# The Pipeline is fully deterministic — no model, no configuration beyond this.
+queue = JobQueue(Pipeline(install_user=RUN_AS_INSTALL, allowed_rungs=_RUNGS or None))
 
 
 # -- HTTP plumbing ----------------------------------------------------
@@ -393,7 +403,13 @@ def ensure_baseline(kind: str = "") -> dict:
             rec = store.load(tid)
             if rec is None:
                 rec = store.create(entry.get("source", ""), entry["section"], tid)
-                rec.manual_dockerfile = entry["dockerfile"]
+                # Declared, not derived. The spec carries the pinned version
+                # where one matters — bbot==3.0.1, subfinder@v2.14.0 — which the
+                # ladder would otherwise resolve to whatever is current today.
+                spec = entry.get("install") or {}
+                rec.install_kind = spec.get("kind", "")
+                rec.install_pkg = spec.get("pkg", "")
+                rec.install_binary = spec.get("binary", "") or tid
                 rec.run_template = entry.get("run", "")
                 rec.baseline, rec.check = True, entry.get("check", "")
                 rec.baseline_order = order
@@ -437,6 +453,29 @@ def unassign_baseline(proj) -> int:
     return n
 
 
+async def _uninstall(rec) -> None:
+    """Undo an install, by the rung that made it.
+
+    Recorded per tool rather than inferred, because the rungs undo differently:
+    apt owns a package name, pipx owns a venv, go install and a clone own a path
+    on disk. Baseline tools are left alone — apt-removing nmap on a Kali box
+    would take half the distro's tooling with it, and the record is what we are
+    dropping here, not the box's own packages.
+    """
+    on_line = lambda text: None
+    try:
+        if rec.baseline:
+            return
+        if rec.strategy == "pipx":
+            await N.pipx_uninstall(rec.install_pkg or rec.id, on_line, RUN_AS_INSTALL)
+        elif rec.strategy in ("go-install", "release-binary") and rec.binary_path:
+            await N.remove_path(rec.binary_path, on_line, RUN_AS_INSTALL)
+        elif rec.strategy == "clone-venv" and rec.install_pkg:
+            await N.remove_path(rec.install_pkg, on_line, RUN_AS_INSTALL)
+    except N.InstallError:
+        pass          # the record still goes; a leftover binary is not a failure
+
+
 async def _add_tool(payload: dict) -> dict:
     # A token is required: unauthenticated GitHub is 60 req/hour and trips abuse
     # detection, which can get the whole IP dropped. Refuse rather than burn it.
@@ -462,10 +501,11 @@ async def _add_tool(payload: dict) -> dict:
             return {**(store.load(tool_id).to_dict()), "assigned": True}
         return {"error": f"'{tool_id}' is already in this section"}
 
-    # Fail fast if Docker isn't available — better than a confusing build error.
+    # Fail fast if the box offers no way to install anything, rather than
+    # surfacing it as a confusing failure four rungs into the ladder.
     try:
-        await D.preflight()
-    except D.DockerError as exc:
+        await N.preflight()
+    except N.InstallError as exc:
         return {"error": str(exc)}
 
     rec = store.create(f"https://github.com/{owner}/{repo}", section, tool_id)
@@ -654,10 +694,10 @@ def make_handler():
 
             elif method == "POST" and len(parts) == 3 and parts[0] == "tools" and parts[2] == "help":
                 rec = store.load(parts[1])
-                if rec is None or not rec.image:
+                if rec is None or not rec.binary_path:
                     writer.write(_ok({"error": "unknown tool"}))
                 else:
-                    rec.help_text = await D.capture_help(rec.image)
+                    rec.help_text = await N.capture_help(rec.binary_path)
                     rec.save()
                     bus.publish("status", rec.to_dict())
                     writer.write(_ok({"help_text": rec.help_text}))
@@ -1299,9 +1339,7 @@ def make_handler():
                 # the cached repo signals. Destructive, so the UI confirms first.
                 removed = []
                 for rec in store.load_all():
-                    if rec.image and rec.strategy != "docker-pull":
-                        await D.remove_image(rec.image)
-                    await D.remove_volume(f"penstation-home-{rec.id}")
+                    await _uninstall(rec)
                     if store.delete(rec.id):
                         removed.append(rec.id)
                     projects.forget_tool(rec.id)
@@ -1313,9 +1351,8 @@ def make_handler():
 
             elif method == "DELETE" and len(parts) == 2 and parts[0] == "tools":
                 rec = store.load(parts[1])
-                if rec and rec.image and rec.strategy != "docker-pull":
-                    await D.remove_image(rec.image)   # only images we built
-                await D.remove_volume(f"penstation-home-{parts[1]}")
+                if rec:
+                    await _uninstall(rec)
                 ok = store.delete(parts[1])
                 projects.forget_tool(parts[1])   # no dangling assignments
                 bus.publish("removed", {"id": parts[1]})
@@ -1352,10 +1389,10 @@ async def serve(host: str, port: int, mirror: bool = True) -> None:
 
     server = await asyncio.start_server(make_handler(), host, port)
     try:
-        version = await D.preflight()
-        out(f"docker daemon {version} ✓")
-    except D.DockerError as exc:
-        out(_paint(f"⚠  {exc}\n   (adds will be refused until Docker is running)", "red"))
+        have = await N.preflight()
+        out(f"install methods: {have} ✓")
+    except N.InstallError as exc:
+        out(_paint(f"⚠  {exc}\n   (adds will be refused until one is available)", "red"))
     if settings.github_token():
         out(f"github: token ✓ ({settings.masked(settings.github_token())}, "
             f"from {settings.token_source()})")

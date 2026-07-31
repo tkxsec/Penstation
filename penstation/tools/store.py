@@ -23,8 +23,10 @@ STATUSES = (
 )
 TERMINAL = ("ready", "failed")
 
-# How the tool was acquired.
-STRATEGIES = ("docker-pull", "docker-build", "generated-dockerfile")
+# How the tool was acquired. Recorded because reinstall replays the same rung:
+# a tool that shipped data files alongside its code — cloud_enum's mutation
+# lists — must not come back as a bare binary that has lost them.
+STRATEGIES = ("apt", "pipx", "go-install", "release-binary", "clone-venv")
 
 
 def slug(text: str) -> str:
@@ -42,7 +44,16 @@ class ToolRecord:
     image: str = ""
     resolved_ref: str = ""       # commit/tag actually installed
     install_cmd: str = ""
-    dockerfile: str = ""
+    # Where the tool actually landed, resolved with `command -v` rather than
+    # assumed: apt writes to /usr/bin, go install to the install user's GOPATH,
+    # pipx to its own bin dir, and the server may not share their PATH.
+    binary_path: str = ""
+    version: str = ""            # what this box resolved; replaces pinning
+    install_kind: str = ""       # which rung: apt | pipx | go-install | clone-venv
+    install_pkg: str = ""        # package / module path that rung installs
+    install_binary: str = ""     # command it provides, when it differs from the
+                                 # package name — dnsutils installs `dig`
+    dockerfile: str = ""         # legacy — kept so pre-native records still load
     alt_install_cmd: str = ""    # generated-Dockerfile fallback if the repo's own build fails
     manual_install: str = ""     # install command you supplied when the ladder found none
     manual_dockerfile: str = ""  # a whole Dockerfile you supplied instead

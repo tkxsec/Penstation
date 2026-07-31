@@ -18,25 +18,29 @@ from __future__ import annotations
 import asyncio
 import os
 import shlex
+import signal
 import tempfile
 import time
 from pathlib import Path
 from typing import Callable
 
-from penstation.tools import dockerops as D
+from penstation.tools import nativeops as N
 from penstation.tools.store import ToolRecord
 from penstation.tools.validate import validate_command
 
 OnLine = Callable[[str], None]
 
 DEFAULT_TIMEOUT = 1800.0     # 30 min — scanners legitimately run long
-CONTAINER_OUTDIR = "/out"
 INPUT_NAME = "input.txt"
-CONTAINER_INPUT = f"{CONTAINER_OUTDIR}/{INPUT_NAME}"
-LIMITS = ["--rm", "--memory=2g", "--cpus=2", "--pids-limit=1024"]
+
+# The unprivileged account tools run as. Installing under one account and
+# running under another is the point: a package that behaves during install and
+# misbehaves when invoked would otherwise hold penstation's own access to the
+# map, the evidence and the network position.
+RUN_USER = os.environ.get("PENSTATION_RUN_USER", "")
 
 # tool id -> container name, for Stop
-_active: dict[str, str] = {}
+_active: dict[str, int] = {}
 
 
 class RunError(Exception):
@@ -65,37 +69,44 @@ def _strip_entrypoint(rec: ToolRecord, parts: list[str]) -> list[str]:
 def build_argv(rec: ToolRecord, command: str, name: str,
                outdir_host: Path | None = None,
                has_input: bool = False) -> list[str]:
-    """Assemble the docker run argv.
+    """Assemble the argv to execute.
 
     `{{outdir}}` is where a tool writes; `{{input}}` is a file we wrote for it
     to read. Nearly every tool in this space takes a list — httpx -l, nmap -iL,
     nuclei -l, dnsx -l — so without an input path the output of one step cannot
     become the input of the next.
+
+    With no container there is no mount and no path translation: the tool sees
+    the same directory the server does, which is the run's own scratch dir.
+
+    The first token is replaced with the binary's resolved absolute path when we
+    have one. The server and the tool may run as different accounts with
+    different PATHs, so naming the file rather than trusting a lookup is what
+    makes the run reproducible — and what stops a same-named binary earlier on
+    someone's PATH being the thing that actually ran.
     """
-    filled = command.replace("{{outdir}}", CONTAINER_OUTDIR)
-    if has_input:
-        filled = filled.replace("{{input}}", CONTAINER_INPUT)
+    # Split first, substitute second. The Docker version could fill the path in
+    # before splitting because "/out" survives shlex untouched; a real directory
+    # does not. shlex reads a backslash as an escape, so a Windows path loses its
+    # separators outright, and a path containing a space would split into two
+    # arguments on any platform. Substituting per-token means the path is never
+    # parsed at all.
     try:
-        parts = shlex.split(filled)
+        parts = shlex.split(command)
     except ValueError as exc:
         raise RunError(f"couldn't parse the command: {exc}") from exc
     if not parts:
         raise RunError("empty command")
 
-    args = _strip_entrypoint(rec, parts)
-    argv = ["docker", "run", *LIMITS, "--name", name,
-            # A per-tool named volume for the container's home dir. Without it,
-            # --rm wipes config every run: bbot re-creates its config and
-            # re-downloads Ansible collections each time (and API keys written
-            # to ~/.config could never persist). Docker seeds a named volume
-            # from the image's own contents, so this is safe for any image.
-            "-v", f"penstation-home-{rec.id}:/root"]
-    if outdir_host is not None:
-        # The one intentional mount: an empty per-run scratch dir so tools that
-        # write files have somewhere real to put them. Never the host FS.
-        argv += ["-v", f"{outdir_host}:{CONTAINER_OUTDIR}"]
-    argv += [rec.image, *args]
-    return argv
+    outdir = str(outdir_host) if outdir_host is not None else ""
+    inpath = str(Path(outdir) / INPUT_NAME) if (has_input and outdir) else ""
+    parts = [p.replace("{{outdir}}", outdir) for p in parts]
+    if inpath:
+        parts = [p.replace("{{input}}", inpath) for p in parts]
+
+    if rec.binary_path:
+        parts[0] = rec.binary_path
+    return N.as_user(RUN_USER, parts)
 
 
 async def run_command(rec: ToolRecord, command: str, on_line: OnLine,
@@ -137,21 +148,27 @@ async def run_command(rec: ToolRecord, command: str, on_line: OnLine,
 
     name = _container_name(rec.id)
     argv = build_argv(rec, command, name, outdir, has_input)
-    _active[rec.id] = name
     on_line("$ " + " ".join(shlex.quote(a) for a in argv) + "\n")
 
     try:
         try:
             proc = await asyncio.create_subprocess_exec(
                 *argv,
+                # Its own process group, so Stop can take the whole tree. Killing
+                # only the immediate child leaves nmap's and bbot's helpers
+                # running, which is how a "stopped" scan keeps sending packets.
+                start_new_session=True,
                 stdin=asyncio.subprocess.DEVNULL,   # closed: never hang on input
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
             )
         except FileNotFoundError:
-            raise RunError("`docker` not found on PATH") from None
+            raise RunError(f"`{argv[0]}` not found — is the tool still installed?") from None
         except OSError as exc:
-            raise RunError(f"couldn't start docker: {exc}") from exc
+            raise RunError(f"couldn't start {argv[0]}: {exc}") from exc
+        # Registered only once it is actually running, so Stop never holds a pid
+        # for a process that failed to start.
+        _active[rec.id] = proc.pid
 
         async def pump() -> int:
             assert proc.stdout is not None
@@ -172,8 +189,7 @@ async def run_command(rec: ToolRecord, command: str, on_line: OnLine,
         try:
             code = await asyncio.wait_for(pump(), timeout=timeout)
         except asyncio.TimeoutError:
-            await D.kill_container(name)
-            proc.kill()
+            _kill_tree(proc.pid)
             on_line(f"[timed out after {int(timeout)}s]\n")
             code = -1
 
@@ -196,8 +212,22 @@ async def run_command(rec: ToolRecord, command: str, on_line: OnLine,
             scratch.cleanup()
 
 
-async def stop(tool_id: str) -> bool:
-    name = _active.get(tool_id)
-    if not name:
+def _kill_tree(pid: int) -> bool:
+    """Kill a tool and everything it spawned.
+
+    The child leads its own process group (start_new_session at spawn), so one
+    signal to the group reaches helpers the tool started. Without this, Stop
+    ends the parent and leaves the scan running.
+    """
+    try:
+        os.killpg(os.getpgid(pid), signal.SIGKILL)
+        return True
+    except (ProcessLookupError, PermissionError, AttributeError, OSError):
         return False
-    return await D.kill_container(name)
+
+
+async def stop(tool_id: str) -> bool:
+    pid = _active.get(tool_id)
+    if not pid:
+        return False
+    return _kill_tree(pid)

@@ -1,9 +1,13 @@
 """The setup pipeline: Inspect → Acquire → Verify.
 
 Fully deterministic. Every install recipe is derived from what the repository
-says about itself — a published image, its own Dockerfile, its documented
-install command, its ecosystem's convention, or that same recipe on a base
-image contemporary with its dependencies.
+says about itself — the distro's own package, its documented install command,
+its ecosystem's convention, or a clone of the repository itself.
+
+There is no container runtime on an engagement box, so tools are installed
+natively and run as subprocesses. Which rungs are permitted is a per-deployment
+policy: everything on a box you provision and destroy, distro packages only on
+hardware you do not own.
 
 There was an LLM stage here that wrote and repaired Dockerfiles. It was removed:
 across every tool added in development, each one that installed did so through a
@@ -20,7 +24,7 @@ import re
 import time
 from dataclasses import dataclass
 
-from penstation.tools import dockerops as D
+from penstation.tools import nativeops as N
 from penstation.tools import gather as G
 from penstation.tools import validate as V
 from penstation.events import bus
@@ -30,17 +34,26 @@ from penstation.tools.store import ToolRecord
 @dataclass
 class Candidate:
     """One way to install a tool. The pipeline tries these in order."""
-    kind: str                    # docker-pull | docker-build | generated-dockerfile
-    install_cmd: str
-    dockerfile: str = ""         # empty for pull/build-from-git
-    image: str = ""
+    kind: str                    # apt | pipx | go-install | release-binary | clone-venv
+    install_cmd: str             # the command as shown to you
+    pkg: str = ""                # package name or module path the rung installs
+    binary: str = ""             # what to look for afterwards; defaults to the tool id
     note: str = ""               # human-readable, shown in the log
 
 
 class Pipeline:
-    def __init__(self) -> None:
+    # Every rung, in the order the ladder tries them. A deployment may allow
+    # fewer: on hardware you do not own, `apt` alone means add-a-tool resolves
+    # against the distro and never fetches from the internet.
+    ALL_RUNGS = ("apt", "pipx", "go-install", "release-binary", "clone-venv")
+
+    def __init__(self, install_user: str = "", allowed_rungs=None) -> None:
         self._sig: dict[str, G.Signals] = {}   # cached per tool, inspect -> acquire
         self._plan: dict[str, list[Candidate]] = {}   # recipes left to try
+        # The unprivileged account installs run as, so a package's setup.py
+        # never holds the access penstation itself has. Empty means "this user".
+        self.install_user = install_user
+        self.allowed_rungs = tuple(allowed_rungs or self.ALL_RUNGS)
 
     # -- logging: persist + stream -------------------------------------
     def _log(self, rec: ToolRecord, text: str) -> None:
@@ -49,18 +62,21 @@ class Pipeline:
 
     # -- 2. Inspect ----------------------------------------------------
     async def inspect(self, rec: ToolRecord) -> None:
-        # A baseline tool is a declared Dockerfile with no repository behind it —
-        # nmap and dig are distro packages, so there is nothing to inspect and
-        # gather would fail on an empty URL.
-        if rec.manual_dockerfile and not rec.source_url:
-            self._log(rec, f"$ baseline tool — using its declared Dockerfile\n")
-            for line in rec.manual_dockerfile.strip().splitlines():
-                self._log(rec, f"    | {line}\n")
+        # A baseline tool has a declared install spec and no repository behind
+        # it — nmap and dig are distro packages, so there is nothing to inspect
+        # and gather would fail on an empty URL.
+        #
+        # Declared rather than derived on purpose: the spec carries the pinned
+        # version where one matters (bbot==3.0.1, subfinder@v2.14.0), which the
+        # ladder would otherwise resolve to whatever is current today.
+        if rec.install_kind and not rec.source_url:
+            self._log(rec, f"$ baseline tool — declared install: "
+                           f"{rec.install_kind} {rec.install_pkg}\n")
+            cmd = rec.install_cmd or f"{rec.install_kind} {rec.install_pkg}"
             self._plan[rec.id] = [Candidate(
-                "generated-dockerfile", rec.install_cmd or "(declared)",
-                dockerfile=rec.manual_dockerfile,
-                image=f"penstation/{rec.id}",
-                note="the baseline Dockerfile for this tool")]
+                rec.install_kind, cmd, pkg=rec.install_pkg,
+                binary=rec.install_binary or rec.id,
+                note=f"the declared baseline recipe ({cmd})")]
             self._adopt(rec, self._plan[rec.id][0])
             rec.save()
             return
@@ -116,107 +132,106 @@ class Pipeline:
         time was the root cause of tools dying on their first setback: each new
         repo tripped over a different missing escalation edge. Anything that
         fails here simply hands off to the next entry.
+
+        Ordered by how much of a stranger's code has to run to install it. A
+        distro package runs maintainer scripts from a signed archive; a clone
+        runs whatever is in the repository. That ordering is the reason apt
+        leads and clone trails, not convenience.
         """
         plan: list[Candidate] = []
+        allowed = self.allowed_rungs
 
-        # Anything you supplied by hand goes first: you looked at the failure
-        # and told us what the repo actually needs, which beats every guess
-        # below it. Still validated — a pasted recipe gets the same gate.
-        if rec.manual_dockerfile:
-            check = V.validate_dockerfile(rec.manual_dockerfile)
+        def add(kind: str, cmd: str, pkg: str, note: str, binary: str = "") -> None:
+            if kind in allowed:
+                plan.append(Candidate(kind, cmd, pkg=pkg, binary=binary, note=note))
+
+        # Anything you supplied by hand goes first: you looked at the failure and
+        # told us what the repo actually needs, which beats every guess below it.
+        # Still validated — a pasted recipe gets the same gate as a derived one,
+        # and here that gate is the only one, since nothing runs in a sandbox.
+        if rec.manual_install:
+            check = V.validate_install(rec.manual_install, sig.owner, sig.repo)
             if check:
-                plan.append(Candidate(
-                    "generated-dockerfile", rec.manual_install or "(your Dockerfile)",
-                    dockerfile=rec.manual_dockerfile, image=f"penstation/{rec.id}",
-                    note="the Dockerfile you provided"))
+                kind = self._kind_of(rec.manual_install)
+                add(kind, rec.manual_install, self._pkg_of(rec.manual_install),
+                    f"the install command you provided ({rec.manual_install})")
             else:
-                self._log(rec, f"  [rejected] your Dockerfile: {check.reason}\n")
-        elif rec.manual_install:
-            check = V.validate_install(rec.manual_install)
-            df = G.generate_dockerfile(sig, rec.manual_install) if check else None
-            if df:
-                plan.append(Candidate(
-                    "generated-dockerfile", rec.manual_install, dockerfile=df,
-                    image=f"penstation/{rec.id}",
-                    note=f"your install command ({rec.manual_install})"))
-            elif not check:
                 self._log(rec, f"  [rejected] your command: {check.reason}\n")
-            else:
-                self._log(rec, "  [rejected] your command: can't tell which "
-                               "ecosystem this repo uses, so there's no template "
-                               "to wrap it in — paste a full Dockerfile instead\n")
 
-        image = G.find_published_image(sig)
-        if image and V.validate_install(f"docker pull {image}", sig.owner, sig.repo):
-            plan.append(Candidate("docker-pull", f"docker pull {image}",
-                                  image=image,
-                                  note=f"published image documented by the repo ({image})"))
+        # 0. The distro's own package. Instant, signed, and it does not execute
+        #    code from the repository being installed.
+        name = (sig.repo or "").lower()
+        for pkg in dict.fromkeys([name, name.replace("-", ""), f"{name}-toolkit"]):
+            if pkg:
+                add("apt", f"apt-get install -y {pkg}", pkg,
+                    f"the distro package {pkg}", binary=name)
 
-        if sig.has_dockerfile:
-            plan.append(Candidate(
-                "docker-build", f"docker build -t penstation/{rec.id} {sig.repo_url}.git",
-                note="the repo's own Dockerfile"))
-
-        # Both the README's command and the ecosystem convention are worth
-        # trying — the README is more authoritative, the convention more likely
-        # to still work on a repo whose docs have bit-rotted.
+        # 1-2. What the repo documents. `go install owner/repo@latest` fails for
+        #      most real Go tools — subfinder's path is
+        #      `.../subfinder/v2/cmd/subfinder` — so the extracted command is the
+        #      only reliable source, never the repo name.
         extracted = G.extract_install(sig)
-        if extracted:
-            normalized = G.normalize_install(sig, extracted)
-            if normalized != extracted:
-                self._log(rec, f"  normalized: {extracted}  ->  {normalized}\n")
-                extracted = normalized
-
-        for cmd, why in ((extracted, "the README's install command"),
-                         (G.canonical_install(sig), f"the {sig.ecosystem()[0]} convention")):
-            if not cmd:
+        for cmd in (extracted, G.canonical_install(sig)):
+            if not cmd or not V.validate_install(cmd, sig.owner, sig.repo):
                 continue
-            check = V.validate_install(cmd, sig.owner, sig.repo)
-            if not check:
-                self._log(rec, f"  [rejected] {cmd}: {check.reason}\n")
-                continue
-            df = G.generate_dockerfile(sig, cmd)
-            if df and not any(c.dockerfile == df for c in plan):
-                plan.append(Candidate("generated-dockerfile", cmd, dockerfile=df,
-                                      image=f"penstation/{rec.id}",
-                                      note=f"a Dockerfile generated from {why}"))
+            kind, pkg = self._kind_of(cmd), self._pkg_of(cmd)
+            if kind and not any(c.pkg == pkg and c.kind == kind for c in plan):
+                add(kind, cmd, pkg,
+                    f"the command the repo documents ({cmd})", binary=name)
 
-        # Last deterministic rung: the same recipe on a base image contemporary
-        # with the repo. An old repo's dependencies were resolved against an old
-        # toolchain, and today's manufactures failures the authors never had —
-        # GitGot needs no fixes at all on python:3.9 and cannot build on 3.14.
-        # Tried *after* the modern build, since old images carry old CVEs.
-        era = G.era_base(sig)
-        if era:
-            for cmd in (extracted, G.canonical_install(sig)):
-                if not cmd or not V.validate_install(cmd, sig.owner, sig.repo):
-                    continue
-                df = G.generate_dockerfile(sig, cmd, base_override=era)
-                if df and not any(c.dockerfile == df for c in plan):
-                    plan.append(Candidate(
-                        "generated-dockerfile", cmd, dockerfile=df,
-                        image=f"penstation/{rec.id}",
-                        note=f"the same recipe on {era}, contemporary with the "
-                             f"dependencies (last changed {sig.deps_dated or sig.committed})"))
-                    break
+        # 4. Clone the repository and install into a venv beside it. Last, and
+        #    behind explicit approval, because it runs whatever the repo says to.
+        #    The tree is kept rather than discarded: tools like cloud_enum ship
+        #    wordlists and mutation lists that a bare binary would lose.
+        if sig.owner and sig.repo:
+            add("clone-venv", f"git clone {rec.source_url} && pip install -r requirements.txt",
+                rec.source_url, "clone the repository and install its requirements",
+                binary=name)
         return plan
+
+    # Which rung a command belongs to, and what it installs. The verb already
+    # passed validate_install, so this is classification rather than parsing.
+    @staticmethod
+    def _kind_of(cmd: str) -> str:
+        head = (cmd or "").strip().lower()
+        if head.startswith(("apt install", "apt-get install")):
+            return "apt"
+        if head.startswith(("pipx install", "pip install", "pip3 install")):
+            return "pipx"
+        if head.startswith(("go install", "go get")):
+            return "go-install"
+        if head.startswith("git clone"):
+            return "clone-venv"
+        return ""
+
+    @staticmethod
+    def _pkg_of(cmd: str) -> str:
+        parts = (cmd or "").split()
+        for i, tok in enumerate(parts):
+            if tok in ("install", "get") and i + 1 < len(parts):
+                rest = [p for p in parts[i + 1:] if not p.startswith("-")]
+                return rest[0] if rest else ""
+        return ""
+
+    def _tool_dir(self, rec: ToolRecord) -> str:
+        """Where a cloned tool lives. One directory per tool, under the install
+        user's home so the account that owns it is the one that wrote it."""
+        home = f"/home/{self.install_user}" if self.install_user else os.path.expanduser("~")
+        return f"{home}/tools/{rec.id}"
 
     def _adopt(self, rec: ToolRecord, cand: Candidate) -> None:
         rec.strategy = cand.kind
-        rec.image = cand.image or f"penstation/{rec.id}"
-        rec.install_cmd, rec.dockerfile = cand.install_cmd, cand.dockerfile
+        rec.install_cmd, rec.install_pkg = cand.install_cmd, cand.pkg
         self._log(rec, f"  recipe: {cand.note}\n")
-        for line in cand.dockerfile.strip().splitlines():
-            self._log(rec, f"    | {line}\n")
         rec.save()
 
     # -- Acquire -------------------------------------------
     async def acquire(self, rec: ToolRecord) -> None:
         try:
-            version = await D.preflight()
-        except D.DockerError as exc:
+            have = await N.preflight()
+        except N.InstallError as exc:
             raise SetupFailed(str(exc)) from exc
-        self._log(rec, f"docker daemon {version}\n")
+        self._log(rec, f"install methods available: {have}\n")
 
         plan = list(self._plan.pop(rec.id, []))
         failures: list[str] = []
@@ -229,7 +244,7 @@ class Pipeline:
             try:
                 await self._build(rec, cand)
                 return
-            except D.DockerError as exc:
+            except N.InstallError as exc:
                 failures.append(f"{cand.note} — {exc}")
                 self._log(rec, f"\n[failed] {cand.note}: {exc}\n")
 
@@ -238,7 +253,7 @@ class Pipeline:
             if failures else "no install recipe could be derived for this repo")
 
     async def _build(self, rec: ToolRecord, cand: Candidate) -> None:
-        """Build one candidate. Raises DockerError so the caller tries the next.
+        """Install one candidate. Raises InstallError so the caller tries the next.
 
         There is deliberately no repair loop here. Measured across every tool
         added in development, the repair loop never rescued a build: it deleted
@@ -250,30 +265,46 @@ class Pipeline:
         it. Falling through to the next recipe is both faster and more honest.
         """
         on_line = lambda text: self._log(rec, text)
-        if cand.kind == "docker-pull":
-            await D.pull(rec.image, on_line)
-        elif cand.kind == "docker-build":
-            await D.build_from_git(rec.image, f"{rec.source_url}.git", on_line)
-        elif cand.kind == "generated-dockerfile":
-            await D.build_from_dockerfile(rec.image, rec.dockerfile, on_line)
+        user = self.install_user
+        if cand.kind == "apt":
+            # Root by nature, and the one rung that does not execute code from
+            # the repository being installed.
+            await N.apt_install(cand.pkg, on_line)
+        elif cand.kind == "pipx":
+            await N.pipx_install(cand.pkg, on_line, user)
+        elif cand.kind == "go-install":
+            await N.go_install(cand.pkg, on_line, user)
+        elif cand.kind == "clone-venv":
+            await N.clone_venv(f"{rec.source_url}.git", self._tool_dir(rec),
+                               on_line, user)
         else:
             raise SetupFailed(f"unknown strategy {cand.kind!r}")
 
     # -- 6. Verify -----------------------------------------------------
     async def verify(self, rec: ToolRecord) -> None:
-        if not await D.image_exists(rec.image):
-            raise SetupFailed(f"image {rec.image} not present after acquire")
-        entry = await D.entrypoint_of(rec.image)
-        rec.argv_mode = "entrypoint" if entry else "argv"
-        rec.entrypoint = os.path.basename(entry[0]) if entry else ""
+        # Resolved, not assumed. The install user's PATH is not the server's —
+        # apt writes to /usr/bin, go install to that user's GOPATH, pipx to its
+        # own bin dir — and knowing which file runs is what makes a run
+        # reproducible when the two are different accounts.
+        binary = rec.install_binary or rec.id
+        path = await N.binary_path(binary, self.install_user)
+        if not path:
+            raise SetupFailed(
+                f"installed, but no `{binary}` on PATH afterwards — the package "
+                "may install a differently named command")
+        rec.binary_path, rec.entrypoint = path, binary
+        rec.argv_mode = "argv"          # no images, so no ENTRYPOINT to strip
         rec.save()
-        self._log(rec, f"image present · entrypoint={entry or 'none'} "
-                       f"· argv_mode={rec.argv_mode}\n")
+        self._log(rec, f"binary: {path}\n")
 
-        # Capture the tool's own --help now so run guidance is instant later.
-        self._log(rec, "capturing --help for run guidance…\n")
-        rec.help_text = await D.capture_help(rec.image)
+        # The tool's own --help, so run guidance is instant later — and its
+        # version, which replaces pinning now that the box resolves it rather
+        # than an image we built.
+        self._log(rec, "capturing --help and --version…\n")
+        rec.help_text, rec.version = await N.verify(path, self.install_user)
         rec.save()
+        if rec.version:
+            self._log(rec, f"version: {rec.version}\n")
         self._log(rec, f"help: {len(rec.help_text)} chars\n" if rec.help_text
                   else "help: none captured (run `<tool> --help` yourself to see usage)\n")
 

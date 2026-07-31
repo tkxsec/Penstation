@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "penstation"
+version = "0.2.0"
+description = "A workbench for an external penetration test — scope, a map of what you found, and the toolset that fills it in"
+readme = "README.md"
+requires-python = ">=3.10"
+
+# Deliberately empty, and worth keeping that way.
+#
+# penstation runs on engagement boxes that are provisioned per job and sometimes
+# have no route to PyPI. Every dependency is one more thing to install there, one
+# more supply chain reaching hardware pointed at a client, and one more reason a
+# fresh box does not work. The whole application is the standard library:
+# asyncio for the server, urllib for GitHub, xml.etree for nmap's output.
+dependencies = []
+
+[project.scripts]
+penstation = "penstation.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["penstation*"]
+
+[tool.setuptools.package-data]
+# The UI is a single file served straight off disk. Without this it is left out
+# of an install and the server answers every page with a 500.
+penstation = ["web/*.html"]

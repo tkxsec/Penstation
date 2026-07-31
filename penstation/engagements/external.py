@@ -87,6 +87,7 @@ BACKBONE = [
         # a tool that declares nothing lists everything (nmap's three formats
         # are all output).
         "output_files": ["output.*", "subdomains.txt"],
+        "install": {"kind": "pipx", "pkg": "bbot==3.0.1", "binary": "bbot"},
         "dockerfile": (
             "FROM python:3.12-slim\n"
             "RUN apt-get update && apt-get install -y --no-install-recommends "
@@ -136,6 +137,8 @@ BACKBONE = [
         # stage: shipping golang:1.24-alpine would be ~250MB of compiler to run
         # one static binary. ca-certificates is not optional — every source is
         # queried over HTTPS, and without it subfinder fails on all of them.
+        "install": {"kind": "go-install", "binary": "subfinder",
+                    "pkg": "github.com/projectdiscovery/subfinder/v2/cmd/subfinder@v2.14.0"},
         "dockerfile": (
             "FROM golang:1.24-alpine AS build\n"
             "RUN apk add --no-cache git\n"
@@ -157,6 +160,7 @@ BACKBONE = [
         # unattributable addresses, so `domain resolves_to host` edges could not
         # be built at all. `+noall +answer` keeps name and address on one line.
         "run": "dig -f {{input}} +noall +answer",
+        "install": {"kind": "apt", "pkg": "dnsutils", "binary": "dig"},
         "dockerfile": (
             "FROM alpine:3.20\n"
             "RUN apk add --no-cache bind-tools\n"
@@ -197,6 +201,7 @@ BACKBONE = [
         # port. output_files stays unset so all three are still listed as
         # evidence; this only narrows what promotion reads.
         "result_file": "scan.xml",
+        "install": {"kind": "apt", "pkg": "nmap", "binary": "nmap"},
         "dockerfile": (
             "FROM alpine:3.20\n"
             "RUN apk add --no-cache nmap nmap-scripts\n"
@@ -257,6 +262,8 @@ BACKBONE = [
         "output_files": ["httpx.jsonl"],
         # Same two-stage build as subfinder, pinned the same way. go.mod for
         # v1.10.0 asks for go 1.26.
+        "install": {"kind": "go-install", "binary": "httpx",
+                    "pkg": "github.com/projectdiscovery/httpx/cmd/httpx@v1.10.0"},
         "dockerfile": (
             "FROM golang:1.26-alpine AS build\n"
             "RUN apk add --no-cache git\n"
@@ -292,6 +299,7 @@ BACKBONE = [
         # -s only silences the progress meter; -v writes to stderr regardless, and
         # -S keeps errors visible.
         "run": "curl -sSILv --max-time 10 https://{{target}}",
+        "install": {"kind": "apt", "pkg": "curl", "binary": "curl"},
         "dockerfile": (
             "FROM alpine:3.20\n"
             "RUN apk add --no-cache curl ca-certificates\n"
@@ -307,6 +315,7 @@ BACKBONE = [
         # with a scheme it cannot dial.
         "targets": ["domain", "host"],
         "run": "openssl s_client -connect {{target}}:443 -servername {{target}}",
+        "install": {"kind": "apt", "pkg": "openssl", "binary": "openssl"},
         "dockerfile": (
             "FROM alpine:3.20\n"
             "RUN apk add --no-cache openssl\n"
