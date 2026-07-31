@@ -68,14 +68,15 @@ BACKBONE = [
         # -y skips the confirmation prompt. The runner closes stdin, so a scan
         # that asked for confirmation would stall rather than fail visibly.
         #
-        # --no-deps stops bbot resolving its own dependencies when a scan
-        # starts: load_modules() calls depsinstaller.install(), which runs the
-        # bundled Ansible playbooks and apt-installs whatever they name. An
-        # engagement should not depend on PyPI and the Debian mirrors answering
-        # at that moment. The Python packages it needs are declared in `inject`
-        # below and its one system package comes from setup.sh, so both are in
-        # place before the first target is touched.
-        "run": "bbot -t {{scope}} -p subdomain-enum --no-deps "
+        # bbot installs its own module dependencies on the first scan that
+        # needs them, which is how it is designed to work and what the
+        # subdomain-enum preset requires: the preset loads around fifty modules,
+        # several of which are Python packages bbot pulls in itself. Denying it
+        # that leaves those modules failing to load one at a time, and the list
+        # of what they need is not published anywhere we could read it.
+        #
+        # The first scan on a fresh box therefore takes longer than later ones.
+        "run": "bbot -t {{scope}} -p subdomain-enum "
                "-em dnsbrute dnsbrute_mutations -y --json -o {{outdir}}",
         # The file that holds the answer to the question this command asks.
         #
@@ -98,18 +99,7 @@ BACKBONE = [
         # a tool that declares nothing lists everything (nmap's three formats
         # are all output).
         "output_files": ["output.*", "subdomains.txt"],
-        # The Python packages --no-deps would otherwise leave uninstalled.
-        # baddns backs the baddns_direct module, which reports subdomain
-        # takeovers; without it the module fails to load and that coverage is
-        # silently missing. Installed into bbot's own venv at setup, where a
-        # failure is something you can look at rather than something you find
-        # three modules into a client scan.
-        #
-        # Deliberately unpinned: bbot declares the version it wants per module
-        # and that mapping is not available here, so pip resolving against the
-        # installed bbot beats a version guessed from outside.
-        "install": {"kind": "pipx", "pkg": "bbot==3.0.1", "binary": "bbot",
-                    "inject": ["baddns"]},
+        "install": {"kind": "pipx", "pkg": "bbot==3.0.1", "binary": "bbot"},
     },
     {
         # No "source": naming a repo here sends the install through repo
