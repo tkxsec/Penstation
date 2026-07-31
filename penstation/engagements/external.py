@@ -112,11 +112,10 @@ BACKBONE = [
                     "inject": ["baddns"]},
     },
     {
-        # No "source": github.com/projectdiscovery/subfinder is where the pinned
-        # version comes from, but naming the repo here sends the install through
-        # repo inspection, which is a GitHub API call the rest of the baseline
-        # does not need and cannot fail on. It also read the README and replaced
-        # this declared command with a bare `subfinder -d {{target}}`.
+        # No "source": naming a repo here sends the install through repo
+        # inspection, which is a GitHub API call the rest of the baseline does
+        # not need and cannot fail on. It also reads the README and replaces this
+        # declared command with a bare `subfinder -d {{target}}`.
         "id": "subfinder",
         "section": "reconnaissance",
         # The same coverage kind as bbot on purpose: either satisfies "we looked
@@ -139,13 +138,10 @@ BACKBONE = [
         # -o writes exactly the names it found and nothing else.
         "result_file": "subdomains.txt",
         "output_files": ["subdomains.txt"],
-        # Built rather than pulled, and pinned like the rest of the baseline.
-        # A Go binary needs no runtime, so the toolchain stays in the build
-        # stage: shipping golang:1.24-alpine would be ~250MB of compiler to run
-        # one static binary. ca-certificates is not optional — every source is
-        # queried over HTTPS, and without it subfinder fails on all of them.
-        "install": {"kind": "go-install", "binary": "subfinder",
-                    "pkg": "github.com/projectdiscovery/subfinder/v2/cmd/subfinder@v2.14.0"},
+        # Kali packages this, and its version tracks upstream closely enough
+        # that building from source buys nothing — an apt install is signed,
+        # instant, and needs no Go toolchain on the box.
+        "install": {"kind": "apt", "pkg": "subfinder", "binary": "subfinder"},
     },
     {
         "id": "dig",
@@ -242,15 +238,18 @@ BACKBONE = [
         # names is minutes rather than hours. The reason to slow it is being
         # noticed — a lot of distinct Host headers from one source address is
         # what enumeration detection looks for — not the load itself.
-        "run": "httpx -l {{input}} -sc -title -td -tls-grab -fhr -silent "
+        # `httpx-toolkit`, not `httpx`: Debian's python3-httpx already owns
+        # /usr/bin/httpx, so Kali ships this one under its own name. The two are
+        # unrelated tools — the Python one is a general HTTP client with no
+        # probing, no titles and no TLS grab — and resolving the wrong one gives
+        # a run that succeeds and reports nothing useful.
+        "run": "httpx-toolkit -l {{input}} -sc -title -td -tls-grab -fhr -silent "
                "-t {{web_threads}} -rl {{web_rate}} "
                "-json -o {{outdir}}/httpx.jsonl",
         "result_file": "httpx.jsonl",
         "output_files": ["httpx.jsonl"],
-        # Same two-stage build as subfinder, pinned the same way. go.mod for
-        # v1.10.0 asks for go 1.26.
-        "install": {"kind": "go-install", "binary": "httpx",
-                    "pkg": "github.com/projectdiscovery/httpx/cmd/httpx@v1.10.0"},
+        "install": {"kind": "apt", "pkg": "httpx-toolkit",
+                    "binary": "httpx-toolkit"},
     },
     {
         "id": "curl",

@@ -381,6 +381,15 @@ def _settings_state() -> dict:
             }
 
 
+def _apply_install_spec(rec, entry: dict, tid: str) -> None:
+    """Copy an engagement type's declared install spec onto a tool record."""
+    spec = entry.get("install") or {}
+    rec.install_kind = spec.get("kind", "")
+    rec.install_pkg = spec.get("pkg", "")
+    rec.install_binary = spec.get("binary", "") or tid
+    rec.install_inject = list(spec.get("inject") or [])
+
+
 def ensure_baseline(kind: str = "") -> dict:
     """Make sure every engagement type's baseline exists in the library.
 
@@ -398,14 +407,13 @@ def ensure_baseline(kind: str = "") -> dict:
             rec = store.load(tid)
             if rec is None:
                 rec = store.create(entry.get("source", ""), entry["section"], tid)
-                # Declared, not derived. The spec carries the pinned version
-                # where one matters — bbot==3.0.1, subfinder@v2.14.0 — which the
-                # ladder would otherwise resolve to whatever is current today.
-                spec = entry.get("install") or {}
-                rec.install_kind = spec.get("kind", "")
-                rec.install_pkg = spec.get("pkg", "")
-                rec.install_binary = spec.get("binary", "") or tid
-                rec.install_inject = list(spec.get("inject") or [])
+                # Declared, not derived. The spec names the package and the
+                # command it provides, which differ often enough to matter —
+                # dnsutils installs `dig`, httpx-toolkit installs
+                # `httpx-toolkit` — and carries a pinned version where one is
+                # needed, which the ladder would otherwise resolve to whatever
+                # is current today.
+                _apply_install_spec(rec, entry, tid)
                 rec.run_template = entry.get("run", "")
                 rec.baseline, rec.check = True, entry.get("check", "")
                 rec.baseline_order = order
@@ -427,10 +435,11 @@ def ensure_baseline(kind: str = "") -> dict:
                 rec.vhosts = bool(entry.get("vhosts"))
                 rec.check = entry.get("check", "")
                 rec.run_template = entry.get("run", "")
-                # Refreshed like run_template: a dependency added to the spec
-                # must reach a box that already has the tool, without a wipe.
-                rec.install_inject = list((entry.get("install") or {})
-                                          .get("inject") or [])
+                # The spec is refreshed too, so changing how a tool is installed
+                # reaches a box that already has it. The record updates; the
+                # binary does not, so a tool whose rung or package changed needs
+                # a retry before the new one is what runs.
+                _apply_install_spec(rec, entry, tid)
                 rec.save()
                 reused.append(tid)
     return {"queued": queued, "reused": reused}
