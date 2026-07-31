@@ -29,7 +29,7 @@ OWNER_HOME="$(getent passwd "$OWNER" | cut -d: -f6)"
 say() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 as_owner() { if [ "$OWNER" = "root" ]; then "$@"; else sudo -u "$OWNER" "$@"; fi; }
 
-say "1/6  install methods"
+say "1/7  install methods"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 # git and curl for the clone and release rungs, golang for go install, pipx for
@@ -37,7 +37,7 @@ apt-get update -qq
 apt-get install -y --no-install-recommends \
     git curl ca-certificates golang pipx seclists python3-venv
 
-say "2/6  unprivileged accounts"
+say "2/7  unprivileged accounts"
 # Downloaded code never holds your access: one account installs, another runs.
 # nologin because neither is ever meant to be a shell you sit in.
 for u in noprivuser-install noprivuser-run; do
@@ -49,7 +49,7 @@ for u in noprivuser-install noprivuser-run; do
     fi
 done
 
-say "3/6  sudoers drop-in"
+say "3/7  sudoers drop-in"
 # Only needed when penstation runs unprivileged; root steps down with runuser and
 # never needs a rule. A drop-in so the main sudoers file is untouched and undoing
 # this is one `rm`.
@@ -74,7 +74,7 @@ EOF
     fi
 fi
 
-say "4/6  penstation"
+say "4/7  penstation"
 # A venv because Kali enforces PEP 668: a plain `pip install` outside one fails
 # with externally-managed-environment, and that protection is worth keeping.
 # Editable, so a git pull takes effect without reinstalling.
@@ -83,7 +83,31 @@ as_owner "$REPO/.venv/bin/pip" install -q --upgrade pip
 as_owner "$REPO/.venv/bin/pip" install -q -e "$REPO"
 echo "  installed into $REPO/.venv"
 
-say "5/6  engagement data"
+say "5/7  shared tool prefix"
+# Installed tools land here rather than in the install account's home. The two
+# accounts are the point — one installs, another runs — but `useradd -m` makes a
+# home 0700, so a tool installed into ~noprivuser-install could not be *executed*
+# by noprivuser-run: `runuser -u noprivuser-run -- ~/.local/bin/bbot` failed with
+# "Permission denied" before the binary was ever reached.
+#
+# Owned by the installer and mode 0755: the installer writes, the runner
+# executes, and the runner cannot modify what it runs.
+#
+# Asked rather than hardcoded, for the same reason the data dir is — nativeops.py
+# already decides where this goes, and a second copy of that rule here would
+# eventually chown a directory penstation is not using.
+PREFIX="$("$REPO/.venv/bin/python" -c 'from penstation.tools.nativeops import SHARED_PREFIX; print(SHARED_PREFIX)')"
+mkdir -p "$PREFIX"/bin "$PREFIX"/pipx "$PREFIX"/tools
+if id noprivuser-install >/dev/null 2>&1; then
+    chown -R noprivuser-install "$PREFIX"
+    OWNS=noprivuser-install
+else
+    OWNS="$(id -un)"
+fi
+chmod -R 755 "$PREFIX"
+echo "  $PREFIX → $OWNS, 0755 (noprivuser-run can execute, not modify)"
+
+say "6/7  engagement data"
 # Asked rather than recomputed: paths.py already decides where state lives, and a
 # second copy of that rule here would eventually chmod a directory penstation is
 # not using.
@@ -93,7 +117,7 @@ chown -R "$OWNER" "$DATA_DIR"
 chmod -R 700 "$DATA_DIR"
 echo "  $DATA_DIR → $OWNER, 700 (the install and run accounts cannot read it)"
 
-say "6/6  what this box can offer"
+say "7/7  what this box can offer"
 for t in apt-get pipx go git curl python3; do
     printf '  %-10s %s\n' "$t" "$(command -v "$t" || echo '— missing')"
 done

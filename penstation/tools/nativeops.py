@@ -70,6 +70,48 @@ def home_of(user: str = "") -> str:
     return f"/home/{user}" if user else os.path.expanduser("~")
 
 
+# -- where installed tools live ----------------------------------------
+# Installs land under a shared prefix, not in the install account's home.
+#
+# The two accounts are the point: one installs, another runs. But `useradd -m`
+# makes a home 0700, so a tool installed into ~noprivuser-install could not be
+# *executed* by noprivuser-run — `runuser -u noprivuser-run -- ~/.local/bin/bbot`
+# failed with "Permission denied" before the binary was ever reached. apt tools
+# were fine only because they land in /usr/bin.
+#
+# The prefix is owned by the install account and mode 0755, which states the
+# intended relationship directly: the installer writes, the runner executes, and
+# the runner cannot modify what it runs. Relying on the two accounts' umasks
+# happening to be 022 would buy the same thing on a good day and fail silently on
+# a bad one.
+#
+# setup.sh creates it. When it is absent — a dev box with no accounts at all —
+# everything falls back to the current user's home, where the question does not
+# arise because there is only one account.
+SHARED_PREFIX = "/opt/penstation"
+
+
+def prefix(user: str = "") -> str:
+    """Root of the install tree for `user`."""
+    return SHARED_PREFIX if os.path.isdir(SHARED_PREFIX) else home_of(user)
+
+
+def bin_dir(user: str = "") -> str:
+    """Where installed commands land — GOBIN and pipx's bin dir alike."""
+    return f"{prefix(user)}/bin"
+
+
+def pipx_home(user: str = "") -> str:
+    """Where pipx keeps its venvs. Must be readable by the run account too: a
+    console script's shebang points straight into its venv's interpreter."""
+    return f"{prefix(user)}/pipx"
+
+
+def tools_dir(user: str = "") -> str:
+    """Where clone+venv trees land, one directory per tool."""
+    return f"{prefix(user)}/tools"
+
+
 def workdir(user: str = "") -> str:
     """A directory `user` can actually enter, to start a subprocess in.
 
@@ -191,16 +233,26 @@ SEARCH_DIRS = ("/usr/local/bin", "/usr/bin", "/bin", "/usr/local/sbin", "/usr/sb
 
 async def binary_path(name: str, user: str = "") -> str:
     """Absolute path to an installed binary, or "" if it isn't there."""
+    # The shared prefix first, and by path rather than by lookup: `command -v`
+    # answers from the *server's* PATH, which is a different account's. That is
+    # how a same-named binary earlier on someone's PATH becomes the thing that
+    # actually ran — the Python `httpx` console script shadowing ProjectDiscovery's
+    # is the case that bites in this space.
+    home = home_of(user)
+    candidates = (
+        f"{bin_dir(user)}/{name}",
+        f"{home}/.local/bin/{name}",       # pre-prefix installs, still valid
+        f"{home}/go/bin/{name}",
+        *(f"{d}/{name}" for d in SEARCH_DIRS),
+    )
+    for p in candidates:
+        if os.path.isfile(p) and os.access(p, os.X_OK):
+            return p
+    # Nothing where we put things — fall back to asking the shell.
     code, out = await _capture(as_user(user, ["sh", "-c", f"command -v {name}"]),
                                cwd=workdir(user))
     if code == 0 and out.strip():
         return out.strip().splitlines()[0]
-    # A user-scoped install may not be on the server's PATH at all.
-    home = home_of(user)
-    for d in (f"{home}/.local/bin", f"{home}/go/bin", *SEARCH_DIRS):
-        p = f"{d}/{name}"
-        if os.path.isfile(p) and os.access(p, os.X_OK):
-            return p
     return ""
 
 
@@ -239,8 +291,7 @@ async def pipx_install(spec: str, on_line: OnLine, user: str = "") -> None:
     pipx rather than pip because each tool gets an isolated dependency tree,
     which is the part of per-tool images actually worth keeping.
     """
-    home = home_of(user)
-    env = {"PIPX_HOME": f"{home}/.local/pipx", "PIPX_BIN_DIR": f"{home}/.local/bin"}
+    env = {"PIPX_HOME": pipx_home(user), "PIPX_BIN_DIR": bin_dir(user)}
     code = await _stream(as_user(user, ["pipx", "install", spec]),
                          on_line, INSTALL_TIMEOUT, env=env, cwd=workdir(user))
     if code != 0:
@@ -254,8 +305,11 @@ async def go_install(pkg: str, on_line: OnLine, user: str = "") -> None:
     subfinder's is `github.com/projectdiscovery/subfinder/v2/cmd/subfinder`, and
     guessing `owner/repo` fails for most real tools. See gather.extract_install.
     """
+    # GOPATH stays in the install account's home: it is the module cache, wanted
+    # only at build time. GOBIN is the shared prefix, because the *binary* is
+    # what another account has to execute.
     home = home_of(user)
-    env = {"GOPATH": f"{home}/go", "GOBIN": f"{home}/go/bin",
+    env = {"GOPATH": f"{home}/go", "GOBIN": bin_dir(user),
            "HOME": home, "GOFLAGS": "-modcacherw"}
     if not pkg.endswith("@latest") and "@" not in pkg.rsplit("/", 1)[-1]:
         pkg = f"{pkg}@latest"
@@ -365,10 +419,8 @@ async def apt_remove(pkg: str, on_line: OnLine) -> None:
 
 
 async def pipx_uninstall(name: str, on_line: OnLine, user: str = "") -> None:
-    home = home_of(user)
     await _stream(as_user(user, ["pipx", "uninstall", name]), on_line, APT_TIMEOUT,
-                  env={"PIPX_HOME": f"{home}/.local/pipx",
-                       "PIPX_BIN_DIR": f"{home}/.local/bin"},
+                  env={"PIPX_HOME": pipx_home(user), "PIPX_BIN_DIR": bin_dir(user)},
                   cwd=workdir(user))
 
 

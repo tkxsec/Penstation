@@ -83,9 +83,10 @@ Constraints — these are properties of my installer, not preferences:
   rejected outright in an install command.
 - No sudo/su in the command itself — privilege is handled by the installer.
 - It runs as an unprivileged account whose HOME is its own, so anything writing
-  outside that home will fail.
-- Afterwards a binary must be on PATH (or in ~/.local/bin or ~/go/bin), because
-  the next step resolves the command's absolute path and fails without it.
+  outside that home or /opt/penstation will fail.
+- Afterwards a binary must exist in /opt/penstation/bin (where GOBIN and pipx's
+  bin dir both point) or on PATH, because the next step resolves the command's
+  absolute path and fails without it.
 - If the tool reads data files (wordlists, signatures, templates) that ship in
   the repo, prefer a `git clone` so those files stay beside it — an installed
   console script resolves those paths relative to the wrong directory.

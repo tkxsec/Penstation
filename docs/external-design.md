@@ -213,6 +213,33 @@ control characters.
 | new | **reinstall all**, replaying every tool record onto a fresh box |
 | new | `{{wordlist:…}}` and `{{key:…}}`, resolved server-side like pace |
 
+### Two accounts, and what that costs
+
+The separation — one account installs, another runs — has two consequences a
+container had handled for free, and both showed up as permission errors that
+looked like something else.
+
+**Where tools live.** `useradd -m` makes a home `0700`, so a tool installed into
+`~noprivuser-install` cannot be *executed* by `noprivuser-run`: the failure is
+`Permission denied` on the binary, before the tool does anything. Installs
+therefore go to `/opt/penstation/{bin,pipx,tools}`, owned by the install account
+and mode `0755` — the installer writes, the runner executes, and the runner
+cannot modify what it runs. `GOBIN` and `PIPX_BIN_DIR` both point there; `GOPATH`
+stays in the install account's home because the module cache is wanted only at
+build time.
+
+**Where output lands.** `data/` is `0700` and penstation-owned, which is the
+point — tool code must not reach the map, the scope or the evidence. So a tool
+cannot write into a run's directory either. It writes to a scratch directory it
+owns, and penstation moves the results in afterwards. Opening `data/` to the run
+account would have been one chmod and would have given away the whole property.
+
+**Working directory.** A subprocess inherits penstation's, which on an engagement
+box is `/root/Penstation` — mode `0700`, unreachable by either account. Every
+spawn sets `cwd` explicitly. The Go toolchain chdirs in each `compile` it spawns,
+so this surfaced as hundreds of `chdir: permission denied` lines and an exit 1
+that read like a broken recipe.
+
 The verification step keeps its rule: **"produced output within the timeout"**,
 never a bare exit code. Many tools exit non-zero on `--help`, print to stderr, or
 hang on stdin.

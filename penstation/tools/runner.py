@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import os
 import shlex
+import shutil
 import signal
 import tempfile
 from pathlib import Path
@@ -53,6 +54,35 @@ class RunError(Exception):
 
 def is_running(tool_id: str) -> bool:
     return tool_id in _active
+
+
+def _grant(path: Path, user: str) -> None:
+    """Hand a scratch directory to the account the tool runs as.
+
+    No-op when there is no separate run account — then it is already ours.
+    """
+    if not user:
+        return
+    try:
+        import pwd                       # Unix only; absent on a dev box
+        info = pwd.getpwnam(user)
+    except (ImportError, KeyError):
+        return
+    for p in (path, *path.rglob("*")):
+        try:
+            os.chown(p, info.pw_uid, info.pw_gid)
+        except OSError:
+            pass                         # best effort; the run reports the real error
+
+
+def _harvest(scratch: Path, keep: Path) -> None:
+    """Move what the tool produced into the run's own directory.
+
+    Copied rather than handed over: the originals belong to the run account, and
+    what lands in data/ has to belong to penstation.
+    """
+    keep.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(scratch, keep, dirs_exist_ok=True)
 
 
 def build_argv(rec: ToolRecord, command: str,
@@ -103,7 +133,7 @@ async def run_command(rec: ToolRecord, command: str, on_line: OnLine,
     """Run an installed tool as a subprocess.
 
     `outdir_keep` is where files the tool writes to {{outdir}} should land. Pass
-    the run's own directory and they survive; omit it and a temp dir is used and
+    the run's own directory and they survive; omit it and the scratch dir is
     discarded — which is what used to happen unconditionally, so a run reported
     files that had already been deleted by the time you could ask for them.
     """
@@ -117,21 +147,29 @@ async def run_command(rec: ToolRecord, command: str, on_line: OnLine,
 
     # {{input}} lives in the same directory {{outdir}} names, so asking for
     # either one gets you the directory.
+    #
+    # Always a scratch directory, even when the results are being kept. A tool
+    # runs as an unprivileged account and data/ is 0700 penstation-owned, so
+    # writing straight into the run's own directory is a permission error before
+    # the tool does anything — and opening data/ to the run account would hand
+    # tool code the map, the scope and the evidence, which is precisely what the
+    # second account exists to prevent. It writes where it owns; we move the
+    # results in afterwards.
     wants_dir = "{{outdir}}" in command or "{{input}}" in command
     scratch: tempfile.TemporaryDirectory | None = None
     outdir: Path | None = None
     if wants_dir:
-        if outdir_keep is not None:
-            outdir_keep.mkdir(parents=True, exist_ok=True)
-            outdir = outdir_keep
-        else:
-            scratch = tempfile.TemporaryDirectory(prefix="penstation-run-")
-            outdir = Path(scratch.name)
+        scratch = tempfile.TemporaryDirectory(prefix="penstation-run-")
+        outdir = Path(scratch.name)
 
     has_input = bool(input_text) and "{{input}}" in command
     if has_input and outdir is not None:
         (outdir / INPUT_NAME).write_text(
             input_text if input_text.endswith("\n") else input_text + "\n")
+
+    # After the input file is written, so the tool can read that too.
+    if outdir is not None:
+        _grant(outdir, _run_user())
 
     argv = build_argv(rec, command, outdir, has_input)
     on_line("$ " + " ".join(shlex.quote(a) for a in argv) + "\n")
@@ -188,14 +226,20 @@ async def run_command(rec: ToolRecord, command: str, on_line: OnLine,
 
         files: list[dict] = []
         if outdir is not None:
-            for p in sorted(outdir.rglob("*")):
+            # Take ownership of the results before listing them, so what the run
+            # reports is what actually survives in data/.
+            final = outdir
+            if outdir_keep is not None:
+                _harvest(outdir, outdir_keep)
+                final = outdir_keep
+            for p in sorted(final.rglob("*")):
                 if p.is_file():
                     # Path relative to the run dir, so a screenshot in a
                     # subfolder is still addressable later. as_posix() because
                     # the name becomes a URL path: str() on Windows yields
                     # "scan_dir\output.json", which encodes to one %5C-laden
                     # segment the file route cannot resolve.
-                    files.append({"name": p.relative_to(outdir).as_posix(),
+                    files.append({"name": p.relative_to(final).as_posix(),
                                   "bytes": p.stat().st_size})
         return {"command": " ".join(shlex.quote(a) for a in argv),
                 "code": code, "files": files}

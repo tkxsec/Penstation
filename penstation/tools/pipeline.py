@@ -19,7 +19,6 @@ solved what the model could not, and did it in milliseconds instead of minutes.
 from __future__ import annotations
 
 import asyncio
-import os
 import re
 import time
 from dataclasses import dataclass
@@ -212,10 +211,9 @@ class Pipeline:
         return ""
 
     def _tool_dir(self, rec: ToolRecord) -> str:
-        """Where a cloned tool lives. One directory per tool, under the install
-        user's home so the account that owns it is the one that wrote it."""
-        home = f"/home/{self.install_user}" if self.install_user else os.path.expanduser("~")
-        return f"{home}/tools/{rec.id}"
+        """Where a cloned tool lives. One directory per tool, under the shared
+        prefix: the install account owns it, the run account executes from it."""
+        return f"{N.tools_dir(self.install_user)}/{rec.id}"
 
     def _adopt(self, rec: ToolRecord, cand: Candidate) -> None:
         rec.strategy = cand.kind
