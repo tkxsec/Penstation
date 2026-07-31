@@ -97,7 +97,18 @@ BACKBONE = [
         # a tool that declares nothing lists everything (nmap's three formats
         # are all output).
         "output_files": ["output.*", "subdomains.txt"],
-        "install": {"kind": "pipx", "pkg": "bbot==3.0.1", "binary": "bbot"},
+        # `inject` is the answer to bbot resolving module dependencies while it
+        # scans. baddns is a plain PyPI package — nothing about it needs
+        # privilege — but --no-deps disables Python and system dependencies
+        # alike, so baddns_direct failed to load with "No module named
+        # 'baddns'". Installed here it goes into bbot's own venv, as the
+        # unprivileged install account, at setup rather than mid-engagement.
+        #
+        # Deliberately unpinned: bbot declares the version it wants per module
+        # and we do not have that mapping here, so pip resolving against the
+        # installed bbot is a better answer than a version guessed from outside.
+        "install": {"kind": "pipx", "pkg": "bbot==3.0.1", "binary": "bbot",
+                    "inject": ["baddns"]},
     },
     {
         # No "source": github.com/projectdiscovery/subfinder is where the pinned

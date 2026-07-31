@@ -298,6 +298,39 @@ async def pipx_install(spec: str, on_line: OnLine, user: str = "") -> None:
         raise InstallError(f"pipx install {spec} failed (exit {code})")
 
 
+def venv_name(spec: str) -> str:
+    """The venv pipx creates for a spec — `bbot==3.0.1` becomes `bbot`."""
+    return re.split(r"[<>=!~\[]", (spec or "").strip(), 1)[0].strip()
+
+
+async def pipx_inject(spec: str, packages: list, on_line: OnLine,
+                      user: str = "") -> None:
+    """Install extra packages *into* an already-installed tool's venv.
+
+    For dependencies a tool would otherwise resolve while running. bbot installs
+    its own module dependencies at scan time and asks for root to do it, which
+    the run account has no way to answer — so the scan died on a password prompt
+    before a module loaded. Declaring them here installs them at setup instead:
+    unprivileged, recorded on the tool record, and replayed on reinstall.
+
+    Not fatal. A missing optional dependency costs one module; failing the whole
+    install over it would cost the tool.
+    """
+    if not packages:
+        return
+    name = venv_name(spec)
+    env = {"PIPX_HOME": pipx_home(user), "PIPX_BIN_DIR": bin_dir(user)}
+    try:
+        code = await _stream(as_user(user, ["pipx", "inject", name, *packages]),
+                             on_line, INSTALL_TIMEOUT, env=env, cwd=workdir(user))
+        why = f"exit {code}" if code else ""
+    except InstallError as exc:
+        why = str(exc)          # pipx gone, or the call never started
+    if why:
+        on_line(f"[warn] pipx inject {name} {' '.join(packages)} failed "
+                f"({why}) — modules needing those will be skipped\n")
+
+
 async def go_install(pkg: str, on_line: OnLine, user: str = "") -> None:
     """Install a Go tool from its module path.
 

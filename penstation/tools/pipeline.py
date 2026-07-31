@@ -268,6 +268,7 @@ class Pipeline:
             await N.apt_install(cand.pkg, on_line)
         elif cand.kind == "pipx":
             await N.pipx_install(cand.pkg, on_line, user)
+            await N.pipx_inject(cand.pkg, list(rec.install_inject), on_line, user)
         elif cand.kind == "go-install":
             await N.go_install(cand.pkg, on_line, user)
         elif cand.kind == "clone-venv":
