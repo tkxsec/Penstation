@@ -131,9 +131,9 @@ clone+venv   requirements.txt present — needs approval
 
 The last line is the useful one: it says the tool *is* installable and what it
 wants. Where that still is not enough, the card carries a box for supplying the
-recipe yourself — a shell command rather than a Dockerfile, validated by the same
-rules — and `handoff.py` composes the whole question, with the distilled errors
-and this system's constraints, for pasting into whatever model you use.
+recipe yourself — one command, validated by the same rules — and `handoff.py`
+composes the whole question, with the distilled errors and this system's
+constraints, for pasting into whatever model you use.
 
 A supplied recipe is stored on the tool record, so **reinstall replays it**. You
 solve a difficult tool once and every later box gets it without you remembering
@@ -146,33 +146,24 @@ what you did.
 Tools run as subprocesses of the server, as whoever runs penstation — root on a
 provisioned engagement box.
 
-### There were two unprivileged accounts here
+### Privilege
 
-One installed, one ran, so downloaded code never held your access. They were
-removed. The reasoning is worth keeping, because the instinct to add them back is
-a good one and the answer is specific to this deployment.
+There is no privilege separation between penstation and the tools it runs. A
+scanner gets the same access penstation has, which on a provisioned box is root.
 
-What it cost was concrete, and every item is a real tool made worse:
+That is what the tools need. nmap's SYN scan wants `CAP_NET_RAW`, masscan wants
+raw sockets, and bbot writes into its own installation. It is also all the
+separation would have been worth here: penstation runs as root on the same host,
+the box is provisioned for one engagement and destroyed after, and the tools are
+pinned ones you chose. A malicious `subfinder` has the client network regardless
+of which uid invoked it.
 
-- a tool could not be **executed** by the account that had to run it, because
-  `useradd -m` makes a home `0700`
-- results could not be **written**, because `data/` is the thing the separation
-  existed to protect
-- **bbot** could not install module dependencies into a venv owned by someone
-  else, and asked for a sudo password no one was there to type
-- **nmap** could not use the `CAP_NET_RAW` its SYN scan needs
+The isolation boundary is the box, not a second account on it. If an engagement
+needs more than that, it needs its own VM.
 
-What it bought was thinner than it looks. penstation already runs as root on the
-same box. That box is provisioned for one engagement and destroyed after. The
-tools are pinned ones you chose, not arbitrary code. A malicious `subfinder` has
-the client network either way — the account it runs under does not change that.
-
-Keeping machinery that looks like a boundary without being one is worse than not
-having it, because it invites you to rely on it. If you need real isolation, the
-answer is a separate VM, not a second uid on the same host.
-
-`apt` still needs root by nature — and it remains the rung that does not execute
-repository code.
+`validate.py` is therefore the only barrier between a repository's README and a
+command that runs with your access, which is why its rules are strict and why
+nothing reaches a shell.
 
 ---
 
@@ -197,44 +188,36 @@ control characters.
 
 ---
 
-## What changes in code
+## The execution layer
 
-| | |
-|---|---|
-| `dockerops.py` | **removed.** `nativeops.py` carries the same interface: install, verify, remove, stream |
-| `build_argv()` | returns the bare command; there is no `docker run` to wrap it in |
-| `ToolRecord` | stores a resolved binary path and `--version` output; the image and Dockerfile fields are gone |
-| `validate.py` | `validate_dockerfile()` removed — with nothing sandboxed, `validate_install()` is the only barrier |
-| new | **reinstall all**, replaying every tool record onto a fresh box |
-| new | `{{wordlist:…}}` and `{{key:…}}`, resolved server-side like pace |
+`nativeops.py` installs, verifies, removes and streams. `build_argv()` returns a
+bare command. `ToolRecord` stores a resolved binary path and the `--version`
+string the box produced, which is what a run record reports rather than a pin.
+`validate_install()` is the only gate an install command passes.
 
-### Three things a container used to handle
+Three details carry more weight than their size suggests.
 
-Each of these surfaced as an error that read like something else entirely.
-
-**Where tools live.** Not an isolation question — a naming one. Our install path
+**Where tools live.** A naming question, not an isolation one. Our install path
 competes with the distro's, and the distro's is older: Kali ships its own `httpx`
-and `subfinder` in `/usr/bin`, several versions behind the pins. Resolving by
-PATH recorded `/usr/bin/subfinder` v2.6.0 for a recipe that had just installed
-v2.14.0, and would have scanned with it. Installs go to
-`/opt/penstation/{bin,pipx,tools}` and that is the first place looked, so what we
-installed wins over whatever happens to share its name. `GOBIN` and
-`PIPX_BIN_DIR` point there; `GOPATH` stays in the home directory because the
-module cache is wanted only at build time.
+and `subfinder` in `/usr/bin`, several versions behind the pins. Installs go to
+`/opt/penstation/{bin,pipx,tools}`, and that is the first place looked, so what
+penstation installed is what runs. `GOBIN` and `PIPX_BIN_DIR` point there;
+`GOPATH` stays in the home directory because the module cache is wanted only at
+build time.
 
-**Working directory.** A subprocess inherits penstation's, which is the checkout.
-Every spawn sets `cwd` explicitly instead, because what a tool does with the
-working directory is not ours to assume: bbot stats every target against it to
-decide whether the target names a file, and the Go toolchain chdirs in each
-`compile` it spawns. A run gets its own directory, which is also where a tool
-writing relative paths belongs.
+**Working directory.** Every spawn sets `cwd` explicitly rather than inheriting
+penstation's, which is the checkout. What a tool does with the working directory
+is not ours to assume: bbot stats every target against it to decide whether the
+target names a file, and the Go toolchain chdirs in each `compile` it spawns. A
+run gets its own directory, which is also where a tool writing relative paths
+belongs.
 
 **Dependencies at scan time.** bbot resolves its own module dependencies when a
-scan starts — pip packages and apt packages both. That makes an engagement depend
-on PyPI and the Debian mirrors answering at the worst possible moment. It is run
-with `--no-deps`; its Python packages are declared in the tool spec's `inject`
-list and installed into its venv at setup, and its one system package comes from
-`setup.sh`. Everything is resolved before the first target is touched.
+scan starts — pip packages and apt packages both — which makes an engagement
+depend on PyPI and the Debian mirrors answering at the worst possible moment. It
+runs with `--no-deps`; its Python packages are declared in the tool spec's
+`inject` list and installed into its venv at setup, and its one system package
+comes from `setup.sh`.
 
 The verification step keeps its rule: **"produced output within the timeout"**,
 never a bare exit code. Many tools exit non-zero on `--help`, print to stderr, or

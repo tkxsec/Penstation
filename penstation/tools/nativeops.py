@@ -5,25 +5,11 @@ output is streamed line-by-line through `on_line` so a slow install is watchable
 rather than a blob at the end.
 
 **The validator is not defence in depth — it is the defence.** An install runs on
-the engagement box itself, as whoever runs penstation, so validate.py is the
-barrier rather than a second one behind something else. Nothing reaches a shell.
+the engagement box itself, with penstation's own privileges, so validate.py is
+the barrier rather than a second one behind a sandbox. Nothing reaches a shell.
 
-There were two unprivileged accounts here once: one installed, another ran. The
-idea was that downloaded code never held your access. It was removed, because on
-an engagement box it bought less than it cost.
-
-What it cost was concrete. A tool could not be executed by the account that had
-to run it, because `useradd -m` makes a home 0700. Results could not be written,
-because the data directory is the thing the separation existed to protect. bbot
-could not install its own module dependencies into a venv owned by someone else,
-and asked for a sudo password no one was there to type. nmap could not use the
-capability its SYN scan needs. Every one of those is a real tool made worse.
-
-What it bought was thinner than it looks: penstation already runs as root on the
-same box, that box is provisioned for one engagement and destroyed after, and the
-tools are pinned ones you chose. A malicious subfinder has the client network
-either way. The honest trade was to drop it rather than keep machinery that
-looked like a boundary without being one.
+Installs land under a single prefix and every subprocess is given an explicit
+working directory. Both are load-bearing; see `SHARED_PREFIX` and `workdir`.
 """
 from __future__ import annotations
 
@@ -47,23 +33,20 @@ class InstallError(Exception):
 
 
 def home_of() -> str:
-    """Home directory of the account everything runs as — ours."""
+    """Home directory of the account penstation runs as."""
     return os.path.expanduser("~")
 
 
 # -- where installed tools live ----------------------------------------
-# One predictable prefix rather than scattered per-ecosystem defaults.
+# One prefix for everything we install, rather than each ecosystem's own default.
 #
-# This is not about accounts — it survived their removal on its own merit. The
-# distro ships its own `httpx` and `subfinder`, several versions behind the ones
-# the baseline pins, and both land in /usr/bin. Resolving an installed tool by
-# asking the shell found those instead: penstation recorded /usr/bin/subfinder
-# v2.6.0 for a recipe that had just installed v2.14.0, and would have scanned
-# with it. Putting our installs somewhere we control, and looking there first,
-# is what stops a same-named binary elsewhere on PATH being what actually ran.
+# The distro ships its own `httpx` and `subfinder` in /usr/bin, several versions
+# behind the ones the baseline pins. Installing ours somewhere we control, and
+# resolving by that path before consulting PATH, is what decides which of two
+# same-named binaries a scan actually runs.
 #
-# setup.sh creates it; when it is absent, everything falls back to the home
-# directory, which is what a dev box wants anyway.
+# setup.sh creates it. When it is absent, everything falls back to the home
+# directory.
 SHARED_PREFIX = "/opt/penstation"
 
 
@@ -90,12 +73,10 @@ def tools_dir() -> str:
 def workdir() -> str:
     """A directory to start a subprocess in, rather than inheriting ours.
 
-    Never inherit penstation's own. It is normally the checkout — on an
-    engagement box /root/Penstation — and what a tool does with the working
-    directory is not ours to assume: bbot stats every target against it to
-    decide whether the target names a file, and the Go toolchain chdirs in each
-    `compile` it spawns. An incidental CWD is a source of failures that have
-    nothing to do with the command being run.
+    What a tool does with the working directory is not ours to assume: bbot
+    stats every target against it to decide whether the target names a file, and
+    the Go toolchain chdirs in each `compile` it spawns. Penstation's own CWD is
+    the checkout, which has nothing to do with either.
     """
     home = home_of()
     return home if os.path.isdir(home) else tempfile.gettempdir()
@@ -179,14 +160,13 @@ SEARCH_DIRS = ("/usr/local/bin", "/usr/bin", "/bin", "/usr/local/sbin", "/usr/sb
 
 async def binary_path(name: str) -> str:
     """Absolute path to an installed binary, or "" if it isn't there."""
-    # Our prefix first, and by path rather than by lookup. `command -v` answers
-    # from PATH, and PATH is how the distro's own `subfinder` (v2.6.0, in
-    # /usr/bin) got recorded for a recipe that had just installed v2.14.0. What
-    # we installed wins over what happens to be named the same.
+    # Our prefix first, by path rather than by lookup. `command -v` answers from
+    # PATH, where the distro's own older `subfinder` and `httpx` sit in /usr/bin;
+    # checking where we install first is what decides which one a scan runs.
     home = home_of()
     candidates = (
         f"{bin_dir()}/{name}",
-        f"{home}/.local/bin/{name}",       # pre-prefix installs, still valid
+        f"{home}/.local/bin/{name}",       # pipx's own default, still honoured
         f"{home}/go/bin/{name}",
         *(f"{d}/{name}" for d in SEARCH_DIRS),
     )
@@ -252,9 +232,8 @@ async def pipx_inject(spec: str, packages: list, on_line: OnLine) -> None:
 
     For dependencies a tool would otherwise resolve while running. bbot installs
     its own module dependencies mid-scan, which makes an engagement depend on
-    PyPI being reachable at exactly the wrong moment. Declaring them here
-    installs them at setup instead, recorded on the record and replayed on
-    reinstall.
+    PyPI answering at exactly the wrong moment; declaring them installs them at
+    setup instead, recorded on the tool record and replayed on reinstall.
 
     Not fatal. A missing optional dependency costs one module; failing the whole
     install over it would cost the tool.
@@ -281,15 +260,15 @@ async def go_install(pkg: str, on_line: OnLine) -> None:
     subfinder's is `github.com/projectdiscovery/subfinder/v2/cmd/subfinder`, and
     guessing `owner/repo` fails for most real tools. See gather.extract_install.
     """
-    # GOPATH stays in the home directory — it is the module cache, wanted only
-    # at build time. GOBIN is our prefix, because that is where we look first.
+    # GOPATH is the module cache, wanted only at build time, so it stays in the
+    # home directory. GOBIN is the prefix, because that is where we look first.
     home = home_of()
     env = {"GOPATH": f"{home}/go", "GOBIN": bin_dir(),
            "HOME": home, "GOFLAGS": "-modcacherw"}
     if not pkg.endswith("@latest") and "@" not in pkg.rsplit("/", 1)[-1]:
         pkg = f"{pkg}@latest"
     # cwd matters more here than anywhere else: the toolchain chdirs in every
-    # `compile` it spawns, so an unreachable CWD fails once per package.
+    # `compile` it spawns, so it must be a directory that stays readable.
     code = await _stream(["go", "install", pkg],
                          on_line, INSTALL_TIMEOUT, env=env, cwd=workdir())
     if code != 0:

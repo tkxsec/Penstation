@@ -191,14 +191,10 @@ commands are built as argv.
 
 Without a container those rules are the barrier rather than a second one.
 
-Tools run as whoever runs penstation. Two unprivileged accounts used to separate
-installing from running; they were removed because on a box provisioned for one
-engagement and destroyed after, they broke more than they protected — a tool the
-run account could not execute, results it could not write, bbot unable to reach
-its own venv, and nmap without the `CAP_NET_RAW` its SYN scan needs. penstation
-already runs as root on that host, so the separation was a boundary in appearance
-more than in effect. `docs/external-design.md` has the full reasoning. If you
-need real isolation, use a separate VM.
+Tools run with penstation's own privileges — root on a provisioned engagement
+box, which is what nmap's SYN scan and masscan's raw sockets require. The
+isolation boundary is the box itself, destroyed at the end of the engagement, not
+an account on it; if you need more than that, use a separate VM.
 
 Tools are spawned in their own process group so Stop takes the whole tree —
 killing the immediate child leaves nmap's and bbot's helpers running — and always

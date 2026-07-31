@@ -10,11 +10,8 @@ Two details that matter:
     "stopped" scan still sending packets.
   * It starts in the run's **own directory**, never penstation's. A tool is
     entitled to do what it likes with the working directory — bbot stats every
-    target against it to decide whether the target names a file — and inheriting
-    an incidental one produces failures that have nothing to do with the scan.
-
-Tools run as whoever runs penstation. There was an unprivileged account here
-once; see nativeops for why it went.
+    target against it to decide whether the target names a file — so the one it
+    gets is the one holding its input and output.
 
 Nothing goes through a shell: the command is split with shlex and passed as argv.
 """
@@ -63,10 +60,9 @@ def build_argv(rec: ToolRecord, command: str,
     the server does, which is the run's own directory.
 
     The first token is replaced with the binary's resolved absolute path when we
-    have one. Naming the file rather than trusting a lookup is what stops a
-    same-named binary earlier on PATH being the thing that actually ran — the
-    distro's `subfinder` and `httpx` are both several versions behind the ones
-    the baseline pins, and both are in /usr/bin.
+    have one. Naming the file rather than trusting a lookup is what decides which
+    of two same-named binaries runs: the distro ships its own `subfinder` and
+    `httpx` in /usr/bin, several versions behind the ones the baseline pins.
     """
     # Split first, substitute second. shlex reads a backslash as an escape, so a
     # Windows path would lose its separators outright, and a path containing a
@@ -97,9 +93,8 @@ async def run_command(rec: ToolRecord, command: str, on_line: OnLine,
     """Run an installed tool as a subprocess.
 
     `outdir_keep` is where files the tool writes to {{outdir}} should land. Pass
-    the run's own directory and they survive; omit it and the scratch dir is
-    discarded — which is what used to happen unconditionally, so a run reported
-    files that had already been deleted by the time you could ask for them.
+    the run's own directory and they survive; omit it and a temporary directory
+    is used and discarded, so the reported files must be read before returning.
     """
     if rec.status != "ready":
         raise RunError(f"tool is not ready (status: {rec.status})")
@@ -110,8 +105,7 @@ async def run_command(rec: ToolRecord, command: str, on_line: OnLine,
         raise RunError(check.reason)
 
     # {{input}} lives in the same directory {{outdir}} names, so asking for
-    # either one gets you the directory. The tool writes there directly — there
-    # is one account now, so nothing needs handing over afterwards.
+    # either one gets you the directory.
     wants_dir = "{{outdir}}" in command or "{{input}}" in command
     scratch: tempfile.TemporaryDirectory | None = None
     outdir: Path | None = None
@@ -131,11 +125,10 @@ async def run_command(rec: ToolRecord, command: str, on_line: OnLine,
     argv = build_argv(rec, command, outdir, has_input)
     on_line("$ " + " ".join(shlex.quote(a) for a in argv) + "\n")
 
-    # Never inherit penstation's own CWD — normally the checkout. What a tool
-    # does with the working directory is not ours to assume: bbot stats every
-    # target against it to decide whether the target names a file, so a target
-    # that happens to match a filename beside the checkout changes the scan.
-    # The run's own directory is where a tool writing relative paths belongs.
+    # The run's own directory, never penstation's. bbot stats every target
+    # against the CWD to decide whether the target names a file, so a target
+    # matching a filename beside the checkout would change what the scan does.
+    # It is also where a tool writing relative paths belongs.
     cwd = str(outdir) if outdir is not None else N.workdir()
 
     try:

@@ -274,8 +274,8 @@ class Pipeline:
     # -- 6. Verify -----------------------------------------------------
     async def verify(self, rec: ToolRecord) -> None:
         # Resolved, not assumed. apt writes to /usr/bin, go install and pipx to
-        # our own prefix, and knowing exactly which file runs is what stops the
-        # distro's same-named, older binary being what a scan actually used.
+        # penstation's own prefix, and knowing exactly which file runs is what
+        # decides between two binaries that share a name.
         binary = rec.install_binary or rec.id
         path = await N.binary_path(binary)
         if not path:

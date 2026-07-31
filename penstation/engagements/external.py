@@ -40,6 +40,8 @@ SECTIONS = [
 # pinned version where one matters (bbot==3.0.1, subfinder@v2.14.0), which the
 # ladder would otherwise resolve to whatever is current today.
 #
+# `inject` names extra packages that belong inside a tool's own venv.
+#
 # `check` is the coverage kind this tool satisfies, so nmap and masscan both
 # count as a port scan.
 BACKBONE = [
@@ -66,14 +68,13 @@ BACKBONE = [
         # -y skips the confirmation prompt. The runner closes stdin, so a scan
         # that asked for confirmation would stall rather than fail visibly.
         #
-        # --no-deps because bbot installs its own dependencies at scan time:
-        # load_modules() calls depsinstaller.install(), which runs the bundled
-        # Ansible playbooks and apt-installs whatever they name. An engagement
-        # should not depend on PyPI and the Debian mirrors answering at that
-        # moment, and a scan is the wrong time to find out they did not. The
-        # Python packages are declared in `inject` below and the one system
-        # dependency (7z) comes from setup.sh, so both are resolved before the
-        # first target is touched.
+        # --no-deps stops bbot resolving its own dependencies when a scan
+        # starts: load_modules() calls depsinstaller.install(), which runs the
+        # bundled Ansible playbooks and apt-installs whatever they name. An
+        # engagement should not depend on PyPI and the Debian mirrors answering
+        # at that moment. The Python packages it needs are declared in `inject`
+        # below and its one system package comes from setup.sh, so both are in
+        # place before the first target is touched.
         "run": "bbot -t {{scope}} -p subdomain-enum --no-deps "
                "-em dnsbrute dnsbrute_mutations -y --json -o {{outdir}}",
         # The file that holds the answer to the question this command asks.
@@ -97,16 +98,16 @@ BACKBONE = [
         # a tool that declares nothing lists everything (nmap's three formats
         # are all output).
         "output_files": ["output.*", "subdomains.txt"],
-        # `inject` is the answer to bbot resolving module dependencies while it
-        # scans. --no-deps stops it installing software mid-engagement, but it
-        # disables Python and system dependencies alike, so baddns_direct failed
-        # to load with "No module named 'baddns'". Declared here, those packages
-        # go into bbot's own venv at setup — when a failure is something you can
-        # look at, rather than three modules into a client scan.
+        # The Python packages --no-deps would otherwise leave uninstalled.
+        # baddns backs the baddns_direct module, which reports subdomain
+        # takeovers; without it the module fails to load and that coverage is
+        # silently missing. Installed into bbot's own venv at setup, where a
+        # failure is something you can look at rather than something you find
+        # three modules into a client scan.
         #
         # Deliberately unpinned: bbot declares the version it wants per module
-        # and we do not have that mapping here, so pip resolving against the
-        # installed bbot is a better answer than a version guessed from outside.
+        # and that mapping is not available here, so pip resolving against the
+        # installed bbot beats a version guessed from outside.
         "install": {"kind": "pipx", "pkg": "bbot==3.0.1", "binary": "bbot",
                     "inject": ["baddns"]},
     },

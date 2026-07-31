@@ -36,14 +36,12 @@ apt-get update -qq
 apt-get install -y --no-install-recommends \
     git curl ca-certificates golang pipx seclists python3-venv
 
-# bbot resolves its own dependencies at scan time — apt packages included. Even
-# running as root that is the wrong moment for it: an engagement should not
-# depend on PyPI and the Debian mirrors being reachable, and a scan should not
-# install software. It is passed --no-deps, its Python dependencies are declared
-# in the tool spec, and its one system dependency is 7z, provisioned here.
+# bbot's one system dependency. It runs with --no-deps so it never installs
+# software mid-scan, which means anything it needs has to be here instead.
 #
-# The package name has moved (p7zip-full -> 7zip on newer Debian), and a missing
-# 7z costs one bbot module rather than the install, so this must not be fatal.
+# The package name differs across Debian releases (7zip, or p7zip-full on older
+# ones), and a missing 7z costs one bbot module rather than the install, so this
+# must not be fatal.
 apt-get install -y --no-install-recommends 7zip 2>/dev/null \
   || apt-get install -y --no-install-recommends p7zip-full 2>/dev/null \
   || echo "  note: no 7z package found — bbot modules needing it will be skipped"
@@ -58,12 +56,10 @@ as_owner "$REPO/.venv/bin/pip" install -q -e "$REPO"
 echo "  installed into $REPO/.venv"
 
 say "3/5  tool prefix"
-# Where installed tools land. Not a security boundary — a naming one. The distro
-# ships its own `httpx` and `subfinder`, several versions behind the ones the
-# baseline pins, and both sit in /usr/bin. Installing ours somewhere we control,
-# and looking there first, is what stops a scan silently running the wrong
-# binary: penstation recorded /usr/bin/subfinder v2.6.0 for a recipe that had
-# just installed v2.14.0.
+# Where installed tools land, and the first place penstation looks for them. The
+# distro ships its own `httpx` and `subfinder` in /usr/bin, several versions
+# behind the ones the baseline pins, so a scan resolving by PATH alone would run
+# the wrong binary.
 #
 # Asked rather than hardcoded, for the same reason the data dir is — nativeops.py
 # already decides where this goes, and a second copy of that rule here would

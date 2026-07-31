@@ -43,9 +43,8 @@ class ToolRecord:
     strategy: str = ""
     resolved_ref: str = ""       # commit/tag actually installed
     install_cmd: str = ""
-    # Where the tool actually landed, resolved with `command -v` rather than
-    # assumed: apt writes to /usr/bin, go install to the install user's GOPATH,
-    # pipx to its own bin dir, and the server may not share their PATH.
+    # Where the tool actually landed, resolved rather than assumed: apt writes
+    # to /usr/bin, go install and pipx to penstation's own prefix.
     binary_path: str = ""
     version: str = ""            # what this box resolved; replaces pinning
     install_kind: str = ""       # which rung: apt | pipx | go-install | clone-venv
@@ -53,12 +52,9 @@ class ToolRecord:
     install_binary: str = ""     # command it provides, when it differs from the
                                  # package name — dnsutils installs `dig`
     install_inject: list = field(default_factory=list)
-                                 # extra packages to put *inside* this tool's
-                                 # venv. bbot resolves some module dependencies
-                                 # at scan time, which makes an engagement
-                                 # depend on PyPI at the worst moment; declaring
-                                 # them installs them up front and replays on
-                                 # reinstall
+                                 # extra packages installed into this tool's own
+                                 # venv, for dependencies it would otherwise
+                                 # resolve while running — bbot's module deps
     manual_install: str = ""     # install command you supplied when the ladder found none
     tried: list = field(default_factory=list)   # recipe notes, for the handoff prompt
     baseline: bool = False       # part of an engagement type's baseline toolset
